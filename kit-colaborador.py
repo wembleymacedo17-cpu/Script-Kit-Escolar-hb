@@ -13,8 +13,10 @@ from dotenv import load_dotenv
 from io import BytesIO
 import uuid
 from datetime import datetime
+
 # ==================== IMPORTS DO BANCO ====================
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
+from conector_oracle import OracleConnector
 
 load_dotenv()
 client_gemini = genai.Client()  
@@ -78,7 +80,7 @@ generation_config_doc_complementar = types.GenerateContentConfig(
 #---------------------------------------------------FUNCOES DE SISTEMA
 def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalidez"]):
     """Busca colaborador diretamente no banco de dados"""
-    print("Buscando colaborador no banco...")  # debug
+    print("Buscando colaborador no banco...") 
 
     with st.form("form_busca"):
         cracha_digitado = st.number_input("Crachá :", min_value=0, max_value=9999999999, step=1)
@@ -86,38 +88,49 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
 
     if not buscar:
         return None
-
-    db = SessionLocal()
-    try:
-        colaborador = db.query(Colaborador).filter(Colaborador.cracha == cracha_digitado).first()
+    oracle_connector = OracleConnector()
+    oracle_connector.conectar()
+    try:     
+        query = f"""
+        SELECT 
+	    cracha,
+	    NOME_FUNCIONARIO AS nome,
+	    descricao_situacao,
+	    DESCRICAO_CARGO AS titulo_reduzido_cargo,
+	    data_demissao	
+        FROM   apl_vetorh.USU_VPB_COLAB uvc
+        WHERE uvc.cracha = {cracha_digitado}
+        """
+        df = oracle_connector.executar_query(query)
+        colaborador = df.to_dict(orient="records")[0] if not df.empty else None
 
         if not colaborador:
             st.error("❌ Crachá não encontrado na base de dados.")
             return None
 
-        if colaborador.descricao_situacao in situacoes_invalidas:
-            st.error(f"❌ Colaborador não elegível. Situação atual: {colaborador.descricao_situacao}")
+        if colaborador["descricao_situacao"] in situacoes_invalidas:
+            st.error(f"❌ Colaborador não elegível. Situação atual: {colaborador['descricao_situacao']}")
             return None
 
         # ==================== SALVA NO SESSION_STATE ====================
         st.session_state.colaborador = {
-            "id": colaborador.id,                    # ID do banco - essencial!
-            "Crachá": colaborador.cracha,
-            "Nome": colaborador.nome,
-            "Título Reduzido (Cargo)": colaborador.titulo_reduzido_cargo,
-            "Descrição (Situação)": colaborador.descricao_situacao
+            "id": colaborador.get("id",colaborador["cracha"]),  # ← ID real do colaborador no banco        
+            "Crachá": colaborador["cracha"],
+            "Nome": colaborador["nome"],
+            "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
+            "Descrição (Situação)": colaborador["descricao_situacao"]
         }
 
         st.divider()
         st.subheader("👤 Ficha do Colaborador")
-        st.text_input("Nome Completo", value=colaborador.nome, disabled=True)
-        st.text_input("Cargo", value=colaborador.titulo_reduzido_cargo or "", disabled=True)
-        st.text_input("Situação", value=colaborador.descricao_situacao or "", disabled=True)
+        st.text_input("Nome Completo", value=colaborador['nome'], disabled=True)
+        st.text_input("Cargo", value=colaborador['titulo_reduzido_cargo'] or "", disabled=True)
+        st.text_input("Situação", value=colaborador['descricao_situacao'] or "", disabled=True)
 
         return st.session_state.colaborador
 
     finally:
-        db.close()
+        oracle_connector.fechar_conexao()
 
 def adiciona_dados_contato():
     print("Adicionando dados de contato...")

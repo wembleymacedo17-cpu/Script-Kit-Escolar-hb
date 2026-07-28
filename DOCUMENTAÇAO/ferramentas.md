@@ -31,8 +31,12 @@ streamlit run Entrega-Kit-escolar.py\interface_colabe.py
 streamlit cache clear
 streamlit run Entrega-Kit-escolar.py\kit-colaborador.py
 streamlit run "C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar.py\kit-colaborador.py" --server.address 0.0.0.0 --server.port 8501
-
-uvicorn api-teste:app --reload  - carregar api
+uvicorn api_baixas:app --reload - carregar api
 cd C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar
 
 cd "C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar" ; streamlit run kit-colaborador.py
+
+
+ngrok config add-authtoken 3FxfLn2rDcyCcLfB89jw6OEWcQb_4zJPSx3mwVbnkoSs2aC2v  tokjen
+
+ngrok http 8000 -> abrir servidor

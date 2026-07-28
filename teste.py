@@ -1,14 +1,19 @@
-# teste.py
-from database import engine, init_db
-from sqlalchemy import text
+from conector_oracle import OracleConnector
 
-print("Testando conexão...")
 
-try:
-    init_db()
-    with engine.connect() as conn:
-        result = conn.execute(text("SELECT version();"))
-        print("✅ Conexão com PostgreSQL OK!")
-        print("Versão:", result.scalar())
-except Exception as e:
-    print("❌ Erro na conexão:", e)
+oracle_connector = OracleConnector()
+
+query = """
+SELECT 
+	cracha,
+	NOME_FUNCIONARIO AS nome,
+	descricao_situacao,
+	DESCRICAO_CARGO AS titulo_reduzido_cargo,
+	data_demissao	
+FROM   apl_vetorh.USU_VPB_COLAB uvc
+"""
+
+oracle_connector.conectar()  
+df = oracle_connector.executar_query(query) 
+
+print(df.head()) 
