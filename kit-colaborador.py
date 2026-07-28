@@ -78,9 +78,13 @@ generation_config_doc_complementar = types.GenerateContentConfig(
 
 
 #---------------------------------------------------FUNCOES DE SISTEMA
+
+
+from conector_Postgre import SupabaseConnector
+
 def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalidez"]):
-    """Busca colaborador diretamente no banco de dados"""
-    print("Buscando colaborador no banco...") 
+    """Busca colaborador diretamente no banco de dados (Supabase)"""
+    print("Buscando colaborador no banco...")
 
     with st.form("form_busca"):
         cracha_digitado = st.number_input("Crachá :", min_value=0, max_value=9999999999, step=1)
@@ -88,20 +92,20 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
 
     if not buscar:
         return None
-    oracle_connector = OracleConnector()
-    oracle_connector.conectar()
-    try:     
+
+    supabase_connector = SupabaseConnector()
+    try:
         query = f"""
         SELECT 
-	    cracha,
-	    NOME_FUNCIONARIO AS nome,
-	    descricao_situacao,
-	    DESCRICAO_CARGO AS titulo_reduzido_cargo,
-	    data_demissao	
-        FROM   apl_vetorh.USU_VPB_COLAB uvc
-        WHERE uvc.cracha = {cracha_digitado}
+            cracha,
+            nome,
+            descricao_situacao,
+            titulo_reduzido_cargo,
+            data_demissao
+        FROM colaboradores
+        WHERE cracha = {cracha_digitado}
         """
-        df = oracle_connector.executar_query(query)
+        df = pd.read_sql(query, supabase_connector.engine)
         colaborador = df.to_dict(orient="records")[0] if not df.empty else None
 
         if not colaborador:
@@ -114,7 +118,7 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
 
         # ==================== SALVA NO SESSION_STATE ====================
         st.session_state.colaborador = {
-            "id": colaborador.get("id",colaborador["cracha"]),  # ← ID real do colaborador no banco        
+            "id": colaborador["cracha"],  # ← usando cracha como identificador, já que não há id
             "Crachá": colaborador["cracha"],
             "Nome": colaborador["nome"],
             "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
@@ -130,7 +134,7 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
         return st.session_state.colaborador
 
     finally:
-        oracle_connector.fechar_conexao()
+        supabase_connector.fechar_conexao()
 
 def adiciona_dados_contato():
     print("Adicionando dados de contato...")

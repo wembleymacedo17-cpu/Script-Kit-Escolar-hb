@@ -1,13 +1,30 @@
 # database.py
+# database.py
 import os
 from datetime import datetime
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint
+from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
-load_dotenv()
 
 # ===================== CONFIGURAÇÃO =====================
-DATABASE_URL = os.getenv("DATABASE_URL")
+env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
+load_dotenv(env_path, override=True, encoding='utf-8')
+
+SUPABASE_USER = os.getenv('SUPABASE_USER', '').strip()
+SUPABASE_PASSWORD = os.getenv('SUPABASE_PASSWORD', '').strip()
+SUPABASE_HOST = os.getenv('SUPABASE_HOST', '').strip()
+SUPABASE_PORT = os.getenv('SUPABASE_PORT', '').strip()
+SUPABASE_DB = os.getenv('SUPABASE_DB', '').strip()
+
+DATABASE_URL = URL.create(
+    drivername="postgresql+psycopg2",
+    username=SUPABASE_USER,
+    password=SUPABASE_PASSWORD,
+    host=SUPABASE_HOST,
+    port=SUPABASE_PORT,
+    database=SUPABASE_DB
+)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, echo=False)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -90,8 +107,5 @@ def init_db():
     print("✅ Tabelas criadas ou já existentes.")
 
 
-# Para teste
 if __name__ == "__main__":
     init_db()
-
-   
