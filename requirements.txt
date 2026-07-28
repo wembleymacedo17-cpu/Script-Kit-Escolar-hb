@@ -1,0 +1,8 @@
+pandas
+streamlit
+qrcode[pil]
+google-genai
+python-dotenv
+sqlalchemy
+psycopg2-binary
+oracledb
