@@ -3,7 +3,7 @@ import requests
 import time
 import cv2
 import numpy as np
-from load_dotenv import load_dotenv 
+from dotenv import load_dotenv
 import os
 
 load_dotenv()  
