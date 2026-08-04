@@ -1,8 +1,15 @@
+# Bibliotecas Gerais e de Dados
 pandas
-streamlit
-qrcode[pil]
-google-genai
 python-dotenv
+google-genai
+streamlit
+requests
+opencv-python
+numpy
+qrcode[pil]
+fastapi
+uvicorn
+pydantic
 sqlalchemy
 psycopg2-binary
 oracledb

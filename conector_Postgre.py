@@ -3,7 +3,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.engine import URL
-
+from sqlalchemy import text
 
 
 class SupabaseConnector:
@@ -53,6 +53,36 @@ class SupabaseConnector:
         except Exception as e:
             print(f"❌ Erro ao subir dados para o Supabase: {e}")
             raise
+    def executar_baixa(self, query: str, parametros: dict):
+        """
+        Executa a instrução de UPDATE retornando o resultado tratado como dicionário.
+        """
+        try:
+            with self.engine.begin() as conn:
+                resultado = conn.execute(text(query), parametros)
+                linha = resultado.fetchone()
+                
+                if linha:
+                    # Converter explicitamente a linha para dict evita o erro 500 no FastAPI
+                    return dict(linha._mapping)
+                return None
+        except Exception as e:
+            print(f"❌ Erro na consulta do banco: {e}")
+            raise e
+    def consultar_dados(self, query: str, parametros: dict):
+        """
+        Executa uma instrução SELECT e retorna todas as linhas como uma lista de dicionários.
+        """
+        try:
+            with self.engine.connect() as conn:
+                resultado = conn.execute(text(query), parametros)
+                linhas = resultado.fetchall()
+                if linhas:
+                    return [dict(linha._mapping) for linha in linhas]
+                return None
+        except Exception as e:
+            print(f"❌ Erro na consulta do banco: {e}")
+            raise e
     def fechar_conexao(self):
          """Fecha a conexão (boa prática)"""
          if self.engine:

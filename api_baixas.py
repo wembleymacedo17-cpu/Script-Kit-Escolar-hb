@@ -11,126 +11,90 @@ Rotas:
 Para rodar:
     uvicorn api_baixas:app --reload
 """
-
-from datetime import datetime
-
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from datetime import datetime
+import uvicorn
+from conector_Postgre import SupabaseConnector 
 
-from database import SessionLocal, Retirada, Colaborador
+app = FastAPI(title="API de Baixas - Kit Escolar")
+db_connector = SupabaseConnector()
 
-app = FastAPI(title="API Kit Escolar")
-
-# CORS liberado para qualquer origem: a leitura do QR Code pode vir de um
-# app de câmera (AppSheet/Glide) ou de uma página web separada, então não dá
-# para restringir a um único domínio conhecido de antemão.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-# ===================== DEPENDÊNCIA DE BANCO =====================
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# ===================== SCHEMAS (respostas da API) =====================
-class RetiradaConsultaResponse(BaseModel):
+class PayloadQRCode(BaseModel):
     codigo_retirada: str
-    nome_colaborador: str
-    cracha: int
-    qtd_kits: int
-    resumo_kits: str | None
-    status: str
-    data_geracao: datetime
-    data_entrega: datetime | None
 
-
-class MensagemResponse(BaseModel):
-    mensagem: str
-
-
-class ErroResponse(BaseModel):
-    erro: str
-
-
-# ===================== ROTAS =====================
-@app.get("/")
-def home():
-    return {"status": "API Kit Escolar no ar"}
-
-
-@app.get(
-    "/api/kits/consultar/{codigo_retirada}",
-    response_model=RetiradaConsultaResponse,
-    responses={404: {"model": ErroResponse}, 409: {"model": ErroResponse}},
-)
-def consultar_retirada(codigo_retirada: str, db: Session = Depends(get_db)):
+# 1. NOVA ROTA: Busca as informações antes de dar a baixa
+@app.get("/api/v1/retiradas/info/{codigo_retirada}", status_code=status.HTTP_200_OK)
+def buscar_informacoes_qrcode(codigo_retirada: str):
+    # Query faz o cruzamento (JOIN) entre as 3 tabelas
+    query_info = """
+        SELECT 
+            r.id_colaborador, 
+            r.status, 
+            r.qtd_kits,
+            d.nome_filho, 
+            e.kit_escolhido
+        FROM public.retiradas r
+        LEFT JOIN public.escolhas_kits e ON r.id_colaborador = e.id_colaborador
+        LEFT JOIN public.dependentes d ON e.id_dependente = d.id_dependente
+        WHERE r.codigo_retirada = :codigo_qr
     """
-    Chamada assim que a câmera lê o QR Code, ANTES de o funcionário apertar
-    qualquer botão. Só mostra os dados na tela; não altera nada no banco.
+    
+    try:
+        linhas = db_connector.consultar_dados(query_info, {"codigo_qr": codigo_retirada})
+        
+        if not linhas:
+            raise HTTPException(status_code=404, detail="QR Code não encontrado.")
+            
+        # Como o select retorna uma linha por filho, vamos agrupar tudo
+        dados_formatados = {
+            "codigo_retirada": codigo_retirada,
+            "status": linhas[0]["status"],
+            "id_colaborador": linhas[0]["id_colaborador"],
+            "qtd_kits": linhas[0]["qtd_kits"],
+            "dependentes": []
+        }
+        
+        for linha in linhas:
+            if linha["nome_filho"]: # Garante que só adiciona se houver dependente
+                dados_formatados["dependentes"].append({
+                    "nome_filho": linha["nome_filho"],
+                    "kit_escolhido": linha["kit_escolhido"]
+                })
+                
+        return dados_formatados
+        
+    except HTTPException:
+        raise
+    except Exception as erro:
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(erro)}")
+
+# 2. ROTA DE BAIXA: Agora só é acionada quando o botão for clicado no Streamlit
+@app.put("/api/v1/retiradas/baixa", status_code=status.HTTP_200_OK)
+def realizar_baixa(payload: PayloadQRCode):
+    query_update = """
+        UPDATE public.retiradas
+        SET 
+            status = 'ENTREGUE', 
+            data_entrega = :data_atual
+        WHERE 
+            codigo_retirada = :codigo_qr 
+            AND status = 'PENDENTE'
+        RETURNING id_retirada, id_colaborador, qtd_kits;
     """
-    retirada = (
-        db.query(Retirada)
-        .filter(Retirada.codigo_retirada == codigo_retirada)
-        .first()
-    )
+    agora = datetime.now()
+    parametros = {"data_atual": agora, "codigo_qr": payload.codigo_retirada}
+    
+    try:
+        resultado = db_connector.executar_baixa(query_update, parametros)
+        if not resultado:
+            raise HTTPException(status_code=404, detail="Kit já entregue ou QR Code inválido.")
+            
+        return {"status": "sucesso", "mensagem": "Baixa realizada com sucesso!"}
+    except HTTPException:
+        raise
+    except Exception as erro:
+        raise HTTPException(status_code=500, detail=str(erro))
 
-    if not retirada:
-        raise HTTPException(status_code=404, detail="Código de retirada não encontrado.")
-
-    if retirada.status == "ENTREGUE":
-        # Devolve 409 (conflito) para o front-end distinguir de um 200 normal
-        # e mostrar o alerta vermelho "kit já retirado" sem liberar o botão.
-        raise HTTPException(status_code=409, detail="Este kit já foi entregue.")
-
-    colaborador = db.query(Colaborador).filter(Colaborador.id == retirada.id_colaborador).first()
-
-    return RetiradaConsultaResponse(
-        codigo_retirada=retirada.codigo_retirada,
-        nome_colaborador=colaborador.nome if colaborador else "Colaborador não encontrado",
-        cracha=colaborador.cracha if colaborador else 0,
-        qtd_kits=retirada.qtd_kits,
-        resumo_kits=retirada.resumo_kits,
-        status=retirada.status,
-        data_geracao=retirada.data_geracao,
-        data_entrega=retirada.data_entrega,
-    )
-
-
-@app.post(
-    "/api/kits/dar-baixa/{codigo_retirada}",
-    response_model=MensagemResponse,
-    responses={404: {"model": ErroResponse}, 409: {"model": ErroResponse}},
-)
-def dar_baixa_retirada(codigo_retirada: str, db: Session = Depends(get_db)):
-    """
-    Chamada quando o funcionário aperta o botão "ENTREGAR KIT",
-    depois de já ter visto os dados na tela via /consultar.
-    """
-    retirada = (
-        db.query(Retirada)
-        .filter(Retirada.codigo_retirada == codigo_retirada)
-        .first()
-    )
-
-    if not retirada:
-        raise HTTPException(status_code=404, detail="Código de retirada não encontrado.")
-
-    if retirada.status == "ENTREGUE":
-        raise HTTPException(status_code=409, detail="Este kit já foi entregue anteriormente.")
-
-    retirada.status = "ENTREGUE"
-    retirada.data_entrega = datetime.utcnow()
-    db.commit()
-
-    return MensagemResponse(mensagem="Sucesso! Baixa confirmada.")
+if __name__ == "__main__":
+    uvicorn.run("api_baixas:app", host="0.0.0.0", port=8000, reload=True)
