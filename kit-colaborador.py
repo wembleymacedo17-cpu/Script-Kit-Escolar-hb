@@ -17,7 +17,9 @@ from datetime import datetime
 # ==================== IMPORTS DO BANCO ====================
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
 from conector_oracle import OracleConnector
+from conector_Postgre import SupabaseConnector
 
+   
 load_dotenv()
 client_gemini = genai.Client()  
 
@@ -73,15 +75,37 @@ generation_config_doc_complementar = types.GenerateContentConfig(
     }
 )
 
-
-
+#--------------------------------------------------------------- busca documento  "uniao_estavel"
+generation_config_uniao_estavel = types.GenerateContentConfig(
+    temperature=0,
+    response_mime_type="application/json",
+    system_instruction=(
+        "Você é um assistente rigoroso de auditoria de documentos civis (Declaração de União Estável).\n"
+        "Regra 1: Verifique se o documento é uma Declaração ou Escritura Pública de União Estável válida. Classifique 'documento_valido' como true ou false.\n"
+        "Regra 2: Verifique se o documento possui carimbo, selo digital, etiqueta ou menção explícita de 'reconhecimento de firma' em cartório. Se não houver, classifique 'firma_reconhecida' como false.\n"
+        "Regra 3: Se houver reconhecimento de firma, verifique obrigatoriamente se o cartório emissor ou o selo pertence à cidade de 'São José do Rio Preto' ou 'Rio Preto'. Classifique 'cartorio_rio_preto' como true ou false.\n"
+        "Regra 4 (EXTREMA IMPORTÂNCIA): Extraia **APENAS o nome completo** dos dois conviventes/companheiros nos campos 'nome_companheiro_1' e 'nome_companheiro_2'. **NÃO** inclua números, RGs, CPFs, endereços ou termos como 'portador', 'portadora'. Retorne estritamente somente o nome civil das pessoas.\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
+    ),
+    response_schema={
+        "type": "OBJECT",
+        "properties": {
+            "documento_valido": {"type": "BOOLEAN"},
+            "firma_reconhecida": {"type": "BOOLEAN"},
+            "cartorio_rio_preto": {"type": "BOOLEAN"},
+            "nome_companheiro_1": {"type": "STRING"},
+            "nome_companheiro_2": {"type": "STRING"}
+        },
+        "required": ["documento_valido", "firma_reconhecida", "cartorio_rio_preto", "nome_companheiro_1", "nome_companheiro_2"]
+    }
+)
 
 
 
 #---------------------------------------------------FUNCOES DE SISTEMA
 
 
-from conector_Postgre import SupabaseConnector
+
 def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalidez"]):
     """Busca colaborador diretamente no banco de dados (Supabase)"""
     print("Buscando colaborador no banco...")
@@ -513,10 +537,59 @@ def formata_telefone(telefone):
     if len(numero) == 11:
         return f"({numero[:2]}) {numero[2:7]}-{numero[7:]}"
     return numero
-
+def avalia_caso_colaborador():
+    st.divider()
+    st.subheader("📋 Validação de Vínculo do Dependente")
+    st.write("Por favor, selecione a situação que melhor se aplica ao registro do seu dependente:")
+    
+    # Criamos 3 colunas para acomodar os botões lado a lado de forma elegante
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("A) Filho registrado em meu nome", use_container_width=True):
+            st.session_state.tipo_fluxo = "A"
+            st.rerun()
+            
+    with col2:
+        if st.button("B) Filho registrado no nome de outra pessoa", use_container_width=True):
+            st.session_state.tipo_fluxo = "B"
+            st.rerun()
+            
+    with col3:
+        if st.button("C) Sou Divorciado(a)", use_container_width=True):
+            st.session_state.tipo_fluxo = "C"
+            st.rerun()
 
 
 #---------------------------------------------------FUNCOES DE validcao de documento
+def analisa_uniao_estavel(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "⚠️ Erro ao ler o arquivo de união estável. Tente novamente."
+    
+    mime_type = arquivo.type
+    ERROS_COM_RETRY = ("503", "timeout", "timed out", "429")
+    
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise esta declaração de união estável e extraia os dados conforme as regras."
+                ],
+                config=generation_config_uniao_estavel,
+            )
+            dados = json.loads(response.text.strip())
+            return dados, None
+        except Exception as e:
+            if tentativa == tentativas:
+                return None, "⚠️ Serviço de validação de união estável indisponível no momento."
+    return None, "⚠️ Não foi possível validar o documento."
+
+
 def analisa_certidao(arquivo, tentativas=3):
     """
     Versão corrigida: trata timeout, 503 e retorna dict (não string).
@@ -956,6 +1029,8 @@ def interface():
         st.session_state.colaborador = None
     if 'contato' not in st.session_state:
         st.session_state.contato = None
+    if 'tipo_fluxo' not in st.session_state:
+        st.session_state.tipo_fluxo = None
     if 'lista_dependentes' not in st.session_state:
         st.session_state.lista_dependentes = []
     if 'aguardando_decisao' not in st.session_state:
@@ -968,7 +1043,6 @@ def interface():
         st.session_state.escolhas_kits = []
 
     # ===================== FASE 1: BUSCA E CONTATO =====================
-    # Só exibe os campos de busca e contato se o contato AINDA NÃO foi salvo
     if st.session_state.contato is None:
         st.write('Informe seu crachá e clique em Buscar Colaborador.')
         
@@ -976,68 +1050,238 @@ def interface():
         if colaborador is not None:
             st.session_state.colaborador = colaborador
 
-        # Se encontrou o colaborador no banco, libera para digitar o contato
         if st.session_state.colaborador is not None:
             contato = adiciona_dados_contato()
             if contato is not None:
                 st.session_state.contato = contato
-                # Rerun recarrega a tela. Como 'contato' agora existe, o bloco FASE 1 vai sumir!
                 st.rerun()  
     
     else:
-        # ===================== FASE 2: DEPENDENTES E KITS =====================
-        # Formulários de busca e contato fecharam! Deixamos apenas um mini-resumo para o usuário não se perder.
+        # ===================== FASE 2: TRIAGEM DE VÍNCULO (A, B, C) =====================
         st.success(f"👤 Colaborador: {st.session_state.colaborador['Nome']} | ✅ Contato salvo.")
         
-        # Cadastro já finalizado
-        if st.session_state.cadastro_finalizado:
-            st.divider()
-            st.success("✅ Cadastro finalizado com sucesso! Obrigado.")
-            if st.session_state.escolhas_kits:
-                exibir_qrcode_final()
-            st.balloons()
+        # Se o usuário ainda não escolheu um caminho, exibe os 3 botões da triagem
+        if st.session_state.tipo_fluxo is None:
+            avalia_caso_colaborador()
             return
 
-        # Escolha dos kits
-        if st.session_state.escolhendo_kits:
-            escolhas_kits = escolher_kits_colaborador()
-            if escolhas_kits is not None:
-                st.session_state.escolhas_kits = escolhas_kits
-                st.session_state.escolhendo_kits = False
-                st.session_state.cadastro_finalizado = True                                
+        # =========================================================================
+        # CAMINHO A: FLUXO NORMAL (Filho registrado em meu nome)
+        # =========================================================================
+        if st.session_state.tipo_fluxo == "A":
+            
+            # Botão opcional para voltar e trocar a opção de vínculo caso tenha errado
+            if st.button("⬅️ Voltar e trocar opção de vínculo"):
+                st.session_state.tipo_fluxo = None
                 st.rerun()
-            return
 
-        # Aguardando decisão após adicionar dependente
-        if st.session_state.aguardando_decisao:
-            st.divider()
-            st.subheader("✅ Dependente adicionado com sucesso!")
-            for i, dep in enumerate(st.session_state.lista_dependentes, start=1):
-                st.success(f"👦 {i}º dependente: {dep['Nome_filho']}")
+            # Cadastro já finalizado
+            if st.session_state.cadastro_finalizado:
+                st.divider()
+                st.success("✅ Cadastro finalizado com sucesso! Obrigado.")
+                if st.session_state.escolhas_kits:
+                    exibir_qrcode_final()
+                st.balloons()
+                return
+
+            # Escolha dos kits
+            if st.session_state.escolhendo_kits:
+                escolhas_kits = escolher_kits_colaborador()
+                if escolhas_kits is not None:
+                    st.session_state.escolhas_kits = escolhas_kits
+                    st.session_state.escolhendo_kits = False
+                    st.session_state.cadastro_finalizado = True                                
+                    st.rerun()
+                return
+
+            # Aguardando decisão após adicionar dependente
+            if st.session_state.aguardando_decisao:
+                st.divider()
+                st.subheader("✅ Dependente adicionado com sucesso!")
+                for i, dep in enumerate(st.session_state.lista_dependentes, start=1):
+                    st.success(f"👦 {i}º dependente: {dep['Nome_filho']}")
+                    
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    if st.button("➕ Adicionar outro dependente", type="primary"):
+                        st.session_state.aguardando_decisao = False
+                        st.session_state.escolaridade = ""
+                        st.session_state.ano_escolar = ""
+                        st.session_state.aguardando_doc_complementar = False
+                        st.session_state.dados_certidao_filho = None
+                        st.session_state.dependente_temp = None
+                        st.rerun()
+                with col2:
+                    if st.button("🚀 Finalizar cadastro"):
+                        st.session_state.aguardando_decisao = False
+                        st.session_state.escolhendo_kits = True
+                        st.rerun()
+                return
+
+            # Fluxo normal - formulário de adicionar dependente
+            dependente = adicionar_dependentes()
+            if dependente is not None:
+                st.session_state.lista_dependentes.append(dependente)
+                st.session_state.aguardando_decisao = True
+                st.rerun()
+
+        # =========================================================================
+        # CAMINHO B: FILHO REGISTRADO NO NOME DE OUTRA PESSOA (UNIÃO ESTÁVEL)
+        # =========================================================================
+        elif st.session_state.tipo_fluxo == "B":
+            st.subheader("📝 Cadastro via União Estável")
+            st.write(f"Nome Responsável: {st.session_state.colaborador['Nome']}")
+            
+            if st.button("⬅️ Voltar e escolher outra opção"):
+                st.session_state.tipo_fluxo = None
+                st.rerun()
+
+            # Reaproveitamos a seleção de escolaridade igual ao fluxo normal
+            if 'escolaridade' not in st.session_state:
+                st.session_state.escolaridade = ""
+            if 'ano_escolar' not in st.session_state:
+                st.session_state.ano_escolar = ""
+
+            st.selectbox(
+                "Escolaridade",
+                ["", "Educação Infantil", "Ensino Fundamental I", "Ensino Fundamental II", "Ensino Médio"],
+                format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x,
+                key="escolaridade"
+            )
+            
+            opcoes_ano = {
+                "": [],
+                "Educação Infantil":    ["", "Maternal I", "Maternal II", "Etapa I", "Etapa II"],
+                "Ensino Fundamental I": ["", "1º Ano", "2º Ano", "3º Ano", "4º Ano", "5º Ano"],
+                "Ensino Fundamental II":["", "6º Ano", "7º Ano", "8º Ano", "9º Ano"],
+                "Ensino Médio":         ["", "1º Ano", "2º Ano", "3º Ano"]
+            }
+            
+            if st.session_state.escolaridade:
+                st.selectbox(
+                    "Ano Escolar 2026",
+                    opcoes_ano[st.session_state.escolaridade],
+                    format_func=lambda x: "Selecione o Ano Escolar..." if x == "" else x,
+                    key="ano_escolar"
+                )
+
+            with st.form("form_fluxo_b"):
+                st.info("📌 Requisitos: Envie a **Certidão de Nascimento da Criança** e a **Declaração de União Estável** com firma reconhecida em **São José do Rio Preto**.")
                 
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                if st.button("➕ Adicionar outro dependente", type="primary"):
-                    st.session_state.aguardando_decisao = False
-                    st.session_state.escolaridade = ""
-                    st.session_state.ano_escolar = ""
-                    st.session_state.aguardando_doc_complementar = False
-                    st.session_state.dados_certidao_filho = None
-                    st.session_state.dependente_temp = None
-                    st.rerun()
-            with col2:
-                if st.button("🚀 Finalizar cadastro"):
-                    st.session_state.aguardando_decisao = False
-                    st.session_state.escolhendo_kits = True
-                    st.rerun()
-            return
+                nome_filho_b = st.text_input("Nome Completo da Criança")
+                genero_b = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
+                
+                data_maxima_b = date.today() - timedelta(days=730)
+                data_nascimento_b = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_b, format="DD/MM/YYYY")
+                
+                certidao_b = st.file_uploader("Anexar Certidão de Nascimento", type=["pdf", "png", "jpg", "jpeg"])
+                uniao_b = st.file_uploader("Anexar União Estável (com firma reconhecida em SJ Rio Preto)", type=["pdf", "png", "jpg", "jpeg"])
+                
+                salvar_b = st.form_submit_button("Validar e Adicionar Dependente")
 
-        # Fluxo normal - formulário de adicionar dependente
-        dependente = adicionar_dependentes()
-        if dependente is not None:
-            st.session_state.lista_dependentes.append(dependente)
-            st.session_state.aguardando_decisao = True
-            st.rerun()
+            if salvar_b:
+                erros_b = []
+                if not nome_filho_b.strip():
+                    erros_b.append("O nome da criança é obrigatório.")
+                if not genero_b:
+                    erros_b.append("O gênero é obrigatório.")
+                if not st.session_state.escolaridade:
+                    erros_b.append("A escolaridade é obrigatória.")
+                if not st.session_state.ano_escolar:
+                    erros_b.append("O ano escolar é obrigatório.")
+                if not certidao_b:
+                    erros_b.append("A certidão de nascimento é obrigatória.")
+                if not uniao_b:
+                    erros_b.append("A declaração de união estável é obrigatória.")
+                    
+                if erros_b:
+                    for e in erros_b:
+                        st.error(f"⚠️ {e}")
+                else:
+                    with st.spinner("Analisando documentos com a IA... Aguarde"):
+                        # 1. Analisa a Certidão de Nascimento
+                        dados_cert, err_cert = analisa_certidao(certidao_b)
+                        if err_cert:
+                            st.error(f"⚠️ {err_cert}")
+                        else:
+                            # 2. Analisa a União Estável
+                            dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
+                            if err_uniao:
+                                st.error(f"⚠️ {err_uniao}")
+                            else:
+                                # Regras de Validação Rigorosas do Caminho B
+                                if not dados_uniao.get("documento_valido"):
+                                    st.error("⚠️ O documento anexado não é uma Declaração de União Estável válida.")
+                                
+                                # Trava de Reconhecimento de Firma
+                                elif not dados_uniao.get("firma_reconhecida"):
+                                    st.error("⚠️ É NECESSÁRIO RECONHECER FIRMA")
+                                    
+                                # Trava de Cidade (São José do Rio Preto)
+                                elif not dados_uniao.get("cartorio_rio_preto"):
+                                    st.error("⚠️ O reconhecimento de firma precisa ser obrigatoriamente em um cartório de São José do Rio Preto.")
+                                else:
+                                    # Valida se o colaborador faz parte da união estável
+                                    nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                    comp1 = padroniza_texto(dados_uniao.get("nome_companheiro_1", ""))
+                                    comp2 = padroniza_texto(dados_uniao.get("nome_companheiro_2", ""))
+                                    
+                                    colaborador_na_uniao = (nome_colab == comp1 or nome_colab == comp2)
+                                    
+                                    if not colaborador_na_uniao:
+                                        st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como convivente na União Estável apresentada.")
+                                    else:
+                                        # Identifica quem é o companheiro(a) do colaborador
+                                        parceiro = comp2 if nome_colab == comp1 else comp1
+                                        
+                                        # Valida se o companheiro(a) é o pai ou a mãe na certidão da criança
+                                        mae_cert = padroniza_texto(dados_cert.get("nome_mae", ""))
+                                        pai_cert = padroniza_texto(dados_cert.get("nome_pai", ""))
+                                        
+                                        parceiro_na_certidao = (parceiro == mae_cert or parceiro == pai_cert)
+                                        
+                                        if not parceiro_na_certidao:
+                                            st.error("⚠️ O nome do companheiro(a) presente na União Estável não confere com os pais registrados na Certidão de Nascimento da criança.")
+                                        else:
+                                            # Se passou por todas as travas, salva no banco com sinalização de revisão do RH
+                                            db = SessionLocal()
+                                            try:
+                                                novo_dep = Dependente(
+                                                    id_colaborador=st.session_state.colaborador.get("id"),
+                                                    nome_filho=padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b),
+                                                    data_nascimento=data_nascimento_b,
+                                                    genero=genero_b,
+                                                    escolaridade=st.session_state.escolaridade,
+                                                    ano_escola=st.session_state.ano_escolar,
+                                                    revisao_rh="Sim (União Estável - Rio Preto)"
+                                                )
+                                                db.add(novo_dep)
+                                                db.commit()
+                                                db.refresh(novo_dep)
+                                                
+                                                st.success(f"✅ Dependente validado e cadastrado com sucesso via União Estável! ID: {novo_dep.id_dependente}")
+                                                
+                                                # Salva no estado temporário para avançar para a escolha de kits
+                                                st.session_state.lista_dependentes.append({
+                                                    "ID_Dependente": novo_dep.id_dependente,
+                                                    "Nome_filho": novo_dep.nome_filho,
+                                                    "Gênero": novo_dep.genero,
+                                                    "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"),
+                                                    "Escolaridade": novo_dep.escolaridade,
+                                                    "Ano_escolar": novo_dep.ano_escola
+                                                })
+                                                st.session_state.aguardando_decisao = True
+                                                st.rerun()
+                                            finally:
+                                                db.close()
+        # =========================================================================
+        # CAMINHO C: DIVORCIADO(A)
+        # =========================================================================
+        elif st.session_state.tipo_fluxo == "C":
+            st.info("🔄 Fluxo C selecionado: Em breve vamos refazer e corrigir a validação da Certidão de Divórcio/Casamento.")
+            if st.button("⬅️ Voltar e escolher outra opção"):
+                st.session_state.tipo_fluxo = None
+                st.rerun()
 
 # Chamada da função que roda o app
 interface()

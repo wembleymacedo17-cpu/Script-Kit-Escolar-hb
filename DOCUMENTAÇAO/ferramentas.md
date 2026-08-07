@@ -37,6 +37,25 @@ cd C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar
 cd "C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar" ; streamlit run kit-colaborador.py
 
 
-ngrok config add-authtoken 3FxfLn2rDcyCcLfB89jw6OEWcQb_4zJPSx3mwVbnkoSs2aC2v  tokjen
+streamlit run sistema.py
 
-ngrok http 8000 -> abrir servidor
+
+
+REPÚBLICA FEDERATIVA DO BRASIL
+ESTADO DE SÃO PAULO
+OFICIAL DE REGISTRO CIVIL DAS PESSOAS NATURAIS 
+COMARCA DE SÃO JOSÉ DO RIO PRETO - SP
+
+CERTIDÃO DE NASCIMENTO
+
+Nome da Criança: Lucas Silva Macedo
+Sexo: Masculino
+Data de Nascimento: 15/05/2024
+Local de Nascimento: São José do Rio Preto - SP
+
+Filiação:
+Pai: MARCOS da Silva
+Mãe: Maria de Souza Macedo
+
+Averbações / Observações: 
+Documento emitido para fins de comprovação de dependência escolar.
