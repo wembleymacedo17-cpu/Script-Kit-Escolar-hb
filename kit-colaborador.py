@@ -27,24 +27,25 @@ generation_config_certidao = types.GenerateContentConfig(
     system_instruction=(
         "Você é um assistente especializado em extração de dados. Sua tarefa é analisar o documento fornecido.\n"
         "Regra 1: Verifique se o documento é uma Certidão de Nascimento válida. Se for, classifique 'documento_valido' como true. Se for qualquer outro tipo de documento (RG, CNH, boleto) ou estiver ilegível, classifique como false.\n"
-        "Regra 2: Extraia o nome completo do pai e o nome completo da mãe, exatamente como constam no documento. Se um dos nomes não existir (ex: pai ausente), retorne null.\n"
-        "Regra 3: Extraia o nome completo da criança registrada na certidão.\n"
-        "Regra 4: Extraia a data de nascimento da criança no formato DD/MM/AAAA.\n"
-        "Regra 5: Identifique o sexo da criança conforme consta na certidão. Retorne EXATAMENTE 'Masculino' ou 'Feminino', sem abreviações.\n"
+        "Regra 2: Verifique se o documento está totalmente legível. Se estiver borrado, muito escuro, cortado ou ilegível a ponto de não conseguir ler os dados com segurança, classifique 'legivel' como false. Caso contrário, true.\n"
+        "Regra 3: Extraia o nome completo do pai e o nome completo da mãe, exatamente como constam no documento. Se um dos nomes não existir (ex: pai ausente), retorne null.\n"
+        "Regra 4: Extraia o nome completo da criança registrada na certidão.\n"
+        "Regra 5: Extraia a data de nascimento da criança no formato DD/MM/AAAA.\n"
+        "Regra 6: Identifique o sexo da criança conforme consta na certidão. Retorne EXATAMENTE 'Masculino' ou 'Feminino', sem abreviações.\n"
         "OBS: NAO DAR RESPOSTA EXPLICATIVA"
     ),
     response_schema={
         "type": "OBJECT",
         "properties": {
             "documento_valido": {"type": "BOOLEAN"},
+            "legivel": {"type": "BOOLEAN"},
             "nome_pai": {"type": "STRING", "nullable": True},
-            "nome_mae": {"type": "STRING",},
+            "nome_mae": {"type": "STRING"},
             "nome_crianca": {"type": "STRING"},
             "data_nascimento_crianca": {"type": "STRING"},
-            "sexo_crianca": {"type": "STRING","enum": ["Masculino","Feminino"]
-}   
+            "sexo_crianca": {"type": "STRING", "enum": ["Masculino", "Feminino"]}
         },
-        "required": ["documento_valido", "nome_pai", "nome_mae", "nome_crianca", "data_nascimento_crianca", "sexo_crianca"]
+        "required": ["documento_valido", "legivel", "nome_pai", "nome_mae", "nome_crianca", "data_nascimento_crianca", "sexo_crianca"]
     }
 )
 #----------------------------------------------- busca documento  "casamento" ou "divorcio"
@@ -81,20 +82,29 @@ generation_config_doc_complementar = types.GenerateContentConfig(
 
 
 from conector_Postgre import SupabaseConnector
-
 def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalidez"]):
     """Busca colaborador diretamente no banco de dados (Supabase)"""
     print("Buscando colaborador no banco...")
-
+    
     with st.form("form_busca"):
-        cracha_digitado = st.number_input("Crachá :", min_value=0, max_value=9999999999, step=1)
+        # Substituímos number_input por text_input para blindar contra o bug do Enter no Streamlit
+        cracha_digitado = st.text_input("Crachá:", placeholder="Digite o número e aperte Enter")
         buscar = st.form_submit_button("🔍 Buscar")
-
+        
     if not buscar:
         return None
-
+        
+    # Previne o erro no SQL se o usuário apertar Enter com o campo vazio ou digitar letras
+    if not cracha_digitado.strip() or not cracha_digitado.strip().isdigit():
+        st.warning("⚠️ Por favor, digite um número de crachá válido antes de buscar.")
+        return None
+        
+    # Só agora convertemos com segurança para número inteiro
+    cracha_numero = int(cracha_digitado.strip())
+    
     supabase_connector = SupabaseConnector()
     try:
+        # A query agora recebe a variável tratada
         query = f"""
         SELECT 
             cracha,
@@ -103,100 +113,88 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             titulo_reduzido_cargo,
             data_demissao
         FROM colaboradores
-        WHERE cracha = {cracha_digitado}
+        WHERE cracha = {cracha_numero}
         """
         df = pd.read_sql(query, supabase_connector.engine)
         colaborador = df.to_dict(orient="records")[0] if not df.empty else None
-
+        
         if not colaborador:
-            st.error("❌ Crachá não encontrado na base de dados.")
+            st.error("⚠️ Crachá não encontrado na base de dados.")
             return None
-
+            
         if colaborador["descricao_situacao"] in situacoes_invalidas:
-            st.error(f"❌ Colaborador não elegível. Situação atual: {colaborador['descricao_situacao']}")
+            st.error(f"⚠️ Colaborador não elegível. Situação atual: {colaborador['descricao_situacao']}")
             return None
-
+            
         # ==================== SALVA NO SESSION_STATE ====================
         st.session_state.colaborador = {
-            "id": colaborador["cracha"],  # ← usando cracha como identificador, já que não há id
+            "id": colaborador["cracha"],
             "Crachá": colaborador["cracha"],
             "Nome": colaborador["nome"],
             "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
             "Descrição (Situação)": colaborador["descricao_situacao"]
         }
-
+        
         st.divider()
-        st.subheader("👤 Ficha do Colaborador")
+        st.subheader("📋 Ficha do Colaborador")
         st.text_input("Nome Completo", value=colaborador['nome'], disabled=True)
         st.text_input("Cargo", value=colaborador['titulo_reduzido_cargo'] or "", disabled=True)
         st.text_input("Situação", value=colaborador['descricao_situacao'] or "", disabled=True)
-
+        
         return st.session_state.colaborador
-
+        
     finally:
         supabase_connector.fechar_conexao()
 
 def adiciona_dados_contato():
     print("Adicionando dados de contato...")
-
     with st.form("form_contato"):
         st.subheader("📞 Dados de Contato")
-
-        col_email, col_dominio = st.columns([2, 1])
-        with col_email:
-            nome_email = st.text_input("E-mail", placeholder="seu.nome")
-            nome_email_confirmacao = st.text_input("Confirme o E-mail", placeholder="seu.nome")  # ← campo de confirmação
-        with col_dominio:
-            dominios = ["", "@gmail.com", "@outlook.com", "@hotmail.com", "@hcmripreto.com.br", "@yahoo.com.br", "@hospitaldebase.com.br"]
-            dominio_escolhido = st.selectbox(
-                "Domínio",
-                dominios,
-                format_func=lambda x: "Selecione..." if x == "" else x
-            )
-            dominio_escolhido_confirmção = st.selectbox(
-                "Confirme o Domínio:",
-                dominios,
-                format_func=lambda x: "Selecione..." if x == "" else x
-            )
-
+        
+        # Sem colunas, sem seletores de domínio. Apenas dois campos simples.
+        email = st.text_input("E-mail", placeholder="exemplo@gmail.com")
+        confirmacao_email = st.text_input("Confirme o E-mail", placeholder="exemplo@gmail.com")
+            
         telefone = st.text_input("Número de Telefone (WhatsApp)")
-        salvar = st.form_submit_button("📁 Salvar Dados de Contato")
-
+        salvar = st.form_submit_button("💾 Salvar Dados de Contato")
+        
     if not salvar:
         return None
-
+        
     erros = []
-
-    email_completo = f"{nome_email.strip()}{dominio_escolhido}"
-    email_confirmacao_completo = f"{nome_email_confirmacao.strip()}{dominio_escolhido_confirmção}"
-#-------------------------------------------validações dos campos email
-    if not nome_email.strip():
-        erros.append("❌ E-mail é obrigatório.")
-    elif not dominio_escolhido:
-        erros.append("❌ Selecione um domínio.")
-    elif not validar_email(email_completo):
-        erros.append("❌ E-mail inválido.")
-    elif not nome_email_confirmacao.strip():
-        erros.append("❌ Confirmação de e-mail é obrigatória.")
-    elif email_completo != email_confirmacao_completo: 
-        erros.append("❌ Os e-mails não coincidem.")
-#-------------------------------------------validações dos campos telefone  
-
+    
+    # -------------------------------------------
+    # NOVA REGRA: COMPARAÇÃO SIMPLES E DIRETA
+    # -------------------------------------------
+    email_digitado = email.strip()
+    email_confirmado = confirmacao_email.strip()
+    
+    if not email_digitado or not email_confirmado:
+        erros.append("⚠️ O preenchimento e a confirmação do e-mail são obrigatórios.")
+    elif email_digitado.lower() != email_confirmado.lower():
+        # Se os e-mails não forem idênticos, exibe o erro
+        erros.append("⚠️ Os e-mails não batem. Por favor, digite novamente.")
+        
+    # -------------------------------------------
+    # VALIDAÇÕES DO CAMPO DE TELEFONE (Mantido como estava)
+    # -------------------------------------------
     if not telefone.strip():
-        erros.append("❌ Telefone é obrigatório.")
+        erros.append("⚠️ Telefone é obrigatório.")
     else:
         telefone_valido, mensagem_telefone = valida_telefone(telefone)
         if not telefone_valido:
-            erros.append(f"❌ {mensagem_telefone}")    
-
+            erros.append(f"⚠️ {mensagem_telefone}")
+            
+    # Exibe os erros se houver, travando o envio
     if erros:
         for x in erros:
             st.error(f"{x}")
-        return None  
-
-    st.success("✅ Dados de contato salvos com sucesso!")  
+        return None
+        
+    st.success("✅ Dados de contato salvos com sucesso!")
+    
     return {
-        "email": email_completo,
+        "email": email_digitado.lower(), 
         "telefone": formata_telefone(telefone)
     }
 
@@ -342,7 +340,7 @@ def adicionar_dependentes():
                                      format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
         data_maxima   = date.today() - timedelta(days=730)
         data_nascimento = st.date_input("Data de Nascimento",
-                                        min_value=date(2000, 1, 1), max_value=data_maxima)
+                                        min_value=date(2000, 1, 1), max_value=data_maxima, format="DD/MM/YYYY")
         certidao      = st.file_uploader(
             "Anexar Certidão de Nascimento 📄",
             type=["pdf", "png", "jpg", "jpeg"],
@@ -468,19 +466,7 @@ def ficha_colaborador():
 
 #---------------------------------------------------FUNCOES DE VALIDACAO input
 
-def validar_email(email):
-    """
-    Valida se o formato do e-mail é válido.
-    Aceita letras, números, pontos, traços e underscores.
-    """
-    if not email:
-        return False
-        
-    # Padrão Regex para e-mails válidos (ex: nome.sobrenome@dominio.com.br)
-    padrao_email = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
-    
-    # re.fullmatch garante que a string inteira obedeça à regra, sem sobras
-    return bool(re.fullmatch(padrao_email, email.strip()))
+
 def padroniza_texto(texto):
     # Remove espaços extras, converte para maiúsculo e remove acentos
     texto = texto.strip().upper()
@@ -686,6 +672,13 @@ def valida_dados_crianca_certidao(dados_certidao: dict, nome_informado: str, dat
     Retorna (True/False, mensagem).
     """
 #---------------------------------------------------------------------------------------------------------nome_crianca
+
+    if not dados_certidao.get("documento_valido"):
+        return False, "❌ Documento adicionado nao e um certidao de nascimento"
+
+    if dados_certidao.get("legivel") is False:
+        return False, "❌ Documento esta inlegivel , carregue outro"
+
     nome_cert = padroniza_texto(dados_certidao.get("nome_crianca") or "")  ##############################BUSCA NO BANCO DE DADOS #########################
     nome_form = padroniza_texto(nome_informado)
 
@@ -955,10 +948,10 @@ def exibir_qrcode_final():
 #------------------------------------------------------------PAINEL DE CONTROLE------------------------------------------------------------------------
 def interface():
     st.set_page_config(page_title='Funfarme - Kit Escolar', page_icon='🎒')
-    st.title('🏥Funfarme - Kit Escolar')
-    st.write('Informe seu crachá e clique em Buscar Colaborador.')
-
-    # --------------------------------------------------------------- Inicializa todos os estados necessários ---
+    st.title('🎒 Funfarme - Kit Escolar')
+    
+    # ---------------------------------------------------------------
+    # Inicializa todos os estados necessários ---
     if 'colaborador' not in st.session_state:
         st.session_state.colaborador = None
     if 'contato' not in st.session_state:
@@ -972,83 +965,79 @@ def interface():
     if 'escolhendo_kits' not in st.session_state:
         st.session_state.escolhendo_kits = False
     if 'escolhas_kits' not in st.session_state:
-        st.session_state.escolhas_kits = []    
+        st.session_state.escolhas_kits = []
 
-    # ===================== BUSCA DO COLABORADOR =====================
-    colaborador = busca_colaborador()   # ← sem passar df (agora usa banco)
+    # ===================== FASE 1: BUSCA E CONTATO =====================
+    # Só exibe os campos de busca e contato se o contato AINDA NÃO foi salvo
+    if st.session_state.contato is None:
+        st.write('Informe seu crachá e clique em Buscar Colaborador.')
+        
+        colaborador = busca_colaborador()
+        if colaborador is not None:
+            st.session_state.colaborador = colaborador
 
-    if colaborador is not None:
-        st.session_state.colaborador = colaborador
-
-    if st.session_state.colaborador is not None:
-
-        if st.session_state.contato is None:
+        # Se encontrou o colaborador no banco, libera para digitar o contato
+        if st.session_state.colaborador is not None:
             contato = adiciona_dados_contato()
-
             if contato is not None:
                 st.session_state.contato = contato
+                # Rerun recarrega a tela. Como 'contato' agora existe, o bloco FASE 1 vai sumir!
+                st.rerun()  
+    
+    else:
+        # ===================== FASE 2: DEPENDENTES E KITS =====================
+        # Formulários de busca e contato fecharam! Deixamos apenas um mini-resumo para o usuário não se perder.
+        st.success(f"👤 Colaborador: {st.session_state.colaborador['Nome']} | ✅ Contato salvo.")
+        
+        # Cadastro já finalizado
+        if st.session_state.cadastro_finalizado:
+            st.divider()
+            st.success("✅ Cadastro finalizado com sucesso! Obrigado.")
+            if st.session_state.escolhas_kits:
+                exibir_qrcode_final()
+            st.balloons()
+            return
+
+        # Escolha dos kits
+        if st.session_state.escolhendo_kits:
+            escolhas_kits = escolher_kits_colaborador()
+            if escolhas_kits is not None:
+                st.session_state.escolhas_kits = escolhas_kits
+                st.session_state.escolhendo_kits = False
+                st.session_state.cadastro_finalizado = True                                
                 st.rerun()
-        else:
-            st.success("✅ Dados de contato salvos.")
+            return
 
-        if st.session_state.contato is not None:
-
-            # ✅ Cadastro já finalizado
-            if st.session_state.cadastro_finalizado:
-                st.divider()
-                st.success("✅ Cadastro finalizado com sucesso! Obrigado.")
-
-                if st.session_state.escolhas_kits:
-                    exibir_qrcode_final()
-
-                st.balloons()
-                return
-
-            # Escolha dos kits
-            if st.session_state.escolhendo_kits:
-                escolhas_kits = escolher_kits_colaborador()
-
-                if escolhas_kits is not None:
-                    st.session_state.escolhas_kits = escolhas_kits
-                    st.session_state.escolhendo_kits = False
-                    st.session_state.cadastro_finalizado = True           
+        # Aguardando decisão após adicionar dependente
+        if st.session_state.aguardando_decisao:
+            st.divider()
+            st.subheader("✅ Dependente adicionado com sucesso!")
+            for i, dep in enumerate(st.session_state.lista_dependentes, start=1):
+                st.success(f"👦 {i}º dependente: {dep['Nome_filho']}")
+                
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("➕ Adicionar outro dependente", type="primary"):
+                    st.session_state.aguardando_decisao = False
+                    st.session_state.escolaridade = ""
+                    st.session_state.ano_escolar = ""
+                    st.session_state.aguardando_doc_complementar = False
+                    st.session_state.dados_certidao_filho = None
+                    st.session_state.dependente_temp = None
                     st.rerun()
-                return
+            with col2:
+                if st.button("🚀 Finalizar cadastro"):
+                    st.session_state.aguardando_decisao = False
+                    st.session_state.escolhendo_kits = True
+                    st.rerun()
+            return
 
-            # Aguardando decisão após adicionar dependente
-            if st.session_state.aguardando_decisao:
-                st.divider()
-                st.subheader("👶 Dependente adicionado com sucesso!")
+        # Fluxo normal - formulário de adicionar dependente
+        dependente = adicionar_dependentes()
+        if dependente is not None:
+            st.session_state.lista_dependentes.append(dependente)
+            st.session_state.aguardando_decisao = True
+            st.rerun()
 
-                for i, dep in enumerate(st.session_state.lista_dependentes, start=1):
-                    st.success(f"✅ {i}º dependente: {dep['Nome_filho']}")
-
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    if st.button("➕ Adicionar outro dependente", type="primary"):
-                        st.session_state.aguardando_decisao = False
-                        st.session_state.escolaridade = ""
-                        st.session_state.ano_escolar = ""
-                        st.session_state.aguardando_doc_complementar = False
-                        st.session_state.dados_certidao_filho = None
-                        st.session_state.dependente_temp = None
-                        st.rerun()
-
-                with col2:
-                    if st.button("✅ Finalizar cadastro"):
-                        st.session_state.aguardando_decisao = False
-                        st.session_state.escolhendo_kits = True
-                        st.rerun()
-                return
-
-            # Fluxo normal — adicionar dependente
-            dependente = adicionar_dependentes()
-
-            if dependente is not None:
-                st.session_state.lista_dependentes.append(dependente)
-                st.session_state.aguardando_decisao = True
-                st.rerun()
-
-
-
+# Chamada da função que roda o app
 interface()
