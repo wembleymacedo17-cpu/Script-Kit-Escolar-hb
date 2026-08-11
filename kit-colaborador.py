@@ -183,6 +183,65 @@ generation_config_doc_complementar = types.GenerateContentConfig(
     }
 )
 
+# ---------------------------------------------------------------
+# CONFIGURAÇÃO DE IA: C1 (TERMO/CERTIDÃO DE GUARDA JUDICIAL)
+# ---------------------------------------------------------------
+generation_config_guarda_judicial = types.GenerateContentConfig(
+    temperature=0,
+    response_mime_type="application/json",
+    system_instruction=(
+        "Você é um auditor jurídico rigoroso de Termos ou Certidões de Guarda Judicial.\n"
+        "Regra 1: Verifique se o documento é um Termo ou Certidão de Guarda válido. Classifique 'documento_valido' como true ou false.\n"
+        "Regra 2: Verifique se o documento está totalmente legível. Classifique 'legivel' como true ou false.\n"
+        "Regra 3: Verifique se o documento possui assinatura do juiz, carimbo oficial ou código de validação digital. Classifique 'autenticidade_judicial' como true ou false.\n"
+        "Regra 4: Extraia o nome completo da criança ou adolescente mencionado no documento ('nome_crianca').\n"
+        "Regra 5: Extraia o nome completo do(a) guardião(ã) nomeado(a) no documento ('nome_guardiao').\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
+    ),
+    response_schema={
+        "type": "OBJECT",
+        "properties": {
+            "documento_valido": {"type": "BOOLEAN"},
+            "legivel": {"type": "BOOLEAN"},
+            "autenticidade_judicial": {"type": "BOOLEAN"},
+            "nome_crianca": {"type": "STRING"},
+            "nome_guardiao": {"type": "STRING"}
+        },
+        "required": ["documento_valido", "legivel", "autenticidade_judicial", "nome_crianca", "nome_guardiao"]
+    }
+)
+
+# ---------------------------------------------------------------
+# CONFIGURAÇÃO DE IA: C2 (TERMO DE TUTELA JUDICIAL)
+# ---------------------------------------------------------------
+generation_config_tutela_judicial = types.GenerateContentConfig(
+    temperature=0,
+    response_mime_type="application/json",
+    system_instruction=(
+        "Você é um auditor jurídico rigoroso de Termos de Tutela Judicial.\n"
+        "Regra 1: Verifique se o documento é um Termo de Tutela válido. Classifique 'documento_valido' como true ou false.\n"
+        "Regra 2: Verifique se o documento está totalmente legível. Classifique 'legivel' como true ou false.\n"
+        "Regra 3: Verifique se o documento possui assinatura do juiz, carimbo oficial ou código de validação digital. Classifique 'autenticidade_judicial' como true ou false.\n"
+        "Regra 4: Extraia o nome completo da criança ou adolescente mencionado no documento ('nome_crianca').\n"
+        "Regra 5: Extraia o nome completo do(a) tutor(a) nomeado(a) no documento ('nome_tutor').\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
+    ),
+    response_schema={
+        "type": "OBJECT",
+        "properties": {
+            "documento_valido": {"type": "BOOLEAN"},
+            "legivel": {"type": "BOOLEAN"},
+            "autenticidade_judicial": {"type": "BOOLEAN"},
+            "nome_crianca": {"type": "STRING"},
+            "nome_tutor": {"type": "STRING"}
+        },
+        "required": ["documento_valido", "legivel", "autenticidade_judicial", "nome_crianca", "nome_tutor"]
+    }
+)
+
+
+
+
 #---------------------------------------------------FUNCOES DE SISTEMA
 
 
@@ -192,24 +251,21 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
     print("Buscando colaborador no banco...")
     
     with st.form("form_busca"):
-        # Substituímos number_input por text_input para blindar contra o bug do Enter no Streamlit
         cracha_digitado = st.text_input("Crachá:", placeholder="Digite o número e aperte Enter")
         buscar = st.form_submit_button("🔍 Buscar")
         
     if not buscar:
         return None
         
-    # Previne o erro no SQL se o usuário apertar Enter com o campo vazio ou digitar letras
     if not cracha_digitado.strip() or not cracha_digitado.strip().isdigit():
         st.warning("⚠️ Por favor, digite um número de crachá válido antes de buscar.")
+        st.session_state.colaborador = None
         return None
         
-    # Só agora convertemos com segurança para número inteiro
     cracha_numero = int(cracha_digitado.strip())
     
     supabase_connector = SupabaseConnector()
     try:
-        # A query agora recebe a variável tratada
         query = f"""
         SELECT 
             cracha,
@@ -225,10 +281,12 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
         
         if not colaborador:
             st.error("⚠️ Crachá não encontrado na base de dados.")
+            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
             return None
             
         if colaborador["descricao_situacao"] in situacoes_invalidas:
             st.error(f"⚠️ Colaborador não elegível. Situação atual: {colaborador['descricao_situacao']}")
+            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
             return None
             
         # ==================== SALVA NO SESSION_STATE ====================
@@ -641,6 +699,55 @@ def avalia_caso_colaborador():
             st.rerun()
 
 #---------------------------------------------------FUNCOES DE validcao de documento
+def analisa_guarda_judicial(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "Documento(s) ausente(s) ou ilegível(is)"
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise este termo ou certidão de guarda judicial e extraia os dados conforme as regras."
+                ],
+                config=generation_config_guarda_judicial,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception:
+            if tentativa == tentativas:
+                return None, "Documento(s) ausente(s) ou ilegível(is)"
+    return None, "Documento(s) ausente(s) ou ilegível(is)"
+
+def analisa_tutela_judicial(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "Documento(s) ausente(s) ou ilegível(is)"
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise este termo de tutela judicial e extraia os dados conforme as regras."
+                ],
+                config=generation_config_tutela_judicial,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception:
+            if tentativa == tentativas:
+                return None, "Documento(s) ausente(s) ou ilegível(is)"
+    return None, "Documento(s) ausente(s) ou ilegível(is)"
+
+
 def analisa_certidao_averbacao(arquivo, tentativas=3):
     try:
         arquivo.seek(0)
@@ -1665,6 +1772,9 @@ def interface():
         # =========================================================================
         # CAMINHO C: CRIANÇA OU ADOLESCENTE SOB GUARDA OU TUTELA
         # =========================================================================
+        # =========================================================================
+        # CAMINHO C: CRIANÇA OU ADOLESCENTE SOB GUARDA OU TUTELA (C1 e C2)
+        # =========================================================================
         elif st.session_state.tipo_fluxo == "C":
             st.subheader("📝 Cadastro - Criança ou Adolescente sob Guarda ou Tutela")
             
@@ -1685,15 +1795,186 @@ def interface():
                 key="sub_opcao_c"
             )
 
-            # Só exibe se o usuário clicar
             if sub_opcao_c:
                 st.divider()
-                if "C1" in sub_opcao_c:
-                    st.info("📌 **C1 (Guarda Judicial):** Envie o Termo/Certidão de Guarda Judicial e a Certidão de Nascimento da Criança.")
-                    # TODO: Inserir formulário C1 aqui
+                if 'escolaridade' not in st.session_state: st.session_state.escolaridade = ""
+                if 'ano_escolar' not in st.session_state: st.session_state.ano_escolar = ""
 
+                st.selectbox("Escolaridade", ["", "Educação Infantil", "Ensino Fundamental I", "Ensino Fundamental II", "Ensino Médio"], format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x, key="escolaridade")
+                
+                opcoes_ano = {
+                    "": [],
+                    "Educação Infantil":    ["", "Maternal I", "Maternal II", "Etapa I", "Etapa II"],
+                    "Ensino Fundamental I": ["", "1º Ano", "2º Ano", "3º Ano", "4º Ano", "5º Ano"],
+                    "Ensino Fundamental II":["", "6º Ano", "7º Ano", "8º Ano", "9º Ano"],
+                    "Ensino Médio":         ["", "1º Ano", "2º Ano", "3º Ano"]
+                }
+                
+                if st.session_state.escolaridade:
+                    st.selectbox("Ano Escolar 2026", opcoes_ano[st.session_state.escolaridade], format_func=lambda x: "Selecione o Ano Escolar..." if x == "" else x, key="ano_escolar")
+
+                st.write("---")
+
+                # ==================== SUB-FLUXO C1: GUARDA JUDICIAL ====================
+                if "C1" in sub_opcao_c:
+                    with st.form("form_fluxo_c1"):
+                        st.info("📌 Requisitos (C1): Anexe o **Termo/Certidão de Guarda Judicial** E a **Certidão de Nascimento da Criança**.")
+                        
+                        nome_filho_c1 = st.text_input("Nome Completo da Criança / Adolescente")
+                        genero_c1 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x, key="genero_c1")
+                        
+                        data_maxima_c1 = date.today() - timedelta(days=730)
+                        data_nascimento_c1 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_c1, format="DD/MM/YYYY", key="dt_c1")
+                        
+                        certidao_c1 = st.file_uploader("Anexar Certidão de Nascimento da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_c1")
+                        termo_guarda_c1 = st.file_uploader("Anexar Termo/Certidão de Guarda Judicial", type=["pdf", "png", "jpg", "jpeg"], key="termo_guarda_c1")
+                        
+                        salvar_c1 = st.form_submit_button("Validar e Adicionar Dependente (C1)")
+
+                    if salvar_c1:
+                        erros_c1 = []
+                        if not nome_filho_c1.strip(): erros_c1.append("O nome da criança é obrigatório.")
+                        if not genero_c1: erros_c1.append("O gênero é obrigatório.")
+                        if not st.session_state.escolaridade: erros_c1.append("A escolaridade é obrigatória.")
+                        if not st.session_state.ano_escolar: erros_c1.append("O ano escolar é obrigatório.")
+                        if not certidao_c1 or not termo_guarda_c1: erros_c1.append("Documento(s) ausente(s) ou ilegível(is)")
+                            
+                        if erros_c1:
+                            for e in erros_c1: st.error(f"⚠️ {e}")
+                        else:
+                            with st.spinner("Analisando documentos com a IA... Aguarde"):
+                                dados_cert_c1, err_cert_c1 = analisa_certidao(certidao_c1)
+                                if err_cert_c1:
+                                    st.error(f"⚠️ {err_cert_c1}")
+                                else:
+                                    valido_cert, msg_cert = valida_dados_crianca_certidao(dados_cert_c1, nome_filho_c1, data_nascimento_c1, genero_c1)
+                                    if not valido_cert:
+                                        st.error(f"⚠️ {msg_cert}")
+                                    else:
+                                        dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
+                                        if err_guarda:
+                                            st.error(f"⚠️ {err_guarda}")
+                                        else:
+                                            if not dados_guarda.get("documento_valido") or not dados_guarda.get("legivel"):
+                                                st.error("⚠️ Documento(s) ausente(s) ou ilegível(is)")
+                                            elif not dados_guarda.get("autenticidade_judicial"):
+                                                st.error("⚠️ Documento sem comprovação de autenticidade judicial")
+                                            else:
+                                                nome_crianca_guarda = padroniza_texto(dados_guarda.get("nome_crianca", ""))
+                                                nome_crianca_cert = padroniza_texto(dados_cert_c1.get("nome_crianca", ""))
+                                                
+                                                if nome_crianca_guarda and nome_crianca_guarda not in nome_crianca_cert and nome_crianca_cert not in nome_crianca_guarda:
+                                                    st.error(f"⚠️ O nome da criança/adolescente no Termo de Guarda ({dados_guarda.get('nome_crianca')}) não confere com o da Certidão de Nascimento.")
+                                                else:
+                                                    nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                                    guardiao_doc = padroniza_texto(dados_guarda.get("nome_guardiao", ""))
+                                                    
+                                                    if nome_colab not in guardiao_doc and guardiao_doc not in nome_colab:
+                                                        st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta expressamente como o(a) GUARDIÃO(Ã) nomeado(a) no documento judicial ({dados_guarda.get('nome_guardiao')}).")
+                                                    else:
+                                                        db = SessionLocal()
+                                                        try:
+                                                            novo_dep = Dependente(
+                                                                id_colaborador=st.session_state.colaborador.get("id"),
+                                                                nome_filho=nome_crianca_cert or padroniza_texto(nome_filho_c1),
+                                                                data_nascimento=data_nascimento_c1,
+                                                                genero=genero_c1,
+                                                                escolaridade=st.session_state.escolaridade,
+                                                                ano_escola=st.session_state.ano_escolar,
+                                                                revisao_rh="Sim (Guarda Judicial C1)"
+                                                            )
+                                                            db.add(novo_dep)
+                                                            db.commit()
+                                                            db.refresh(novo_dep)
+                                                            st.success(f"✅ Dependente sob guarda judicial validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                            st.session_state.lista_dependentes.append({
+                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                            })
+                                                            st.session_state.aguardando_decisao = True
+                                                            st.rerun()
+                                                        finally:
+                                                            db.close()
+
+                # ==================== SUB-FLUXO C2: TUTELA JUDICIAL ====================
                 elif "C2" in sub_opcao_c:
-                    st.info("📌 **C2 (Tutela Judicial):** Envie o Termo de Tutela Judicial e a Certidão de Nascimento da Criança.")
-                    # TODO: Inserir formulário C2 aqui
+                    with st.form("form_fluxo_c2"):
+                        st.info("📌 Requisitos (C2): Anexe o **Termo de Tutela Judicial** E a **Certidão de Nascimento da Criança**.")
+                        
+                        nome_filho_c2 = st.text_input("Nome Completo da Criança / Adolescente")
+                        genero_c2 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x, key="genero_c2")
+                        
+                        data_maxima_c2 = date.today() - timedelta(days=730)
+                        data_nascimento_c2 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_c2, format="DD/MM/YYYY", key="dt_c2")
+                        
+                        certidao_c2 = st.file_uploader("Anexar Certidão de Nascimento da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_c2")
+                        termo_tutela_c2 = st.file_uploader("Anexar Termo de Tutela Judicial", type=["pdf", "png", "jpg", "jpeg"], key="termo_tutela_c2")
+                        
+                        salvar_c2 = st.form_submit_button("Validar e Adicionar Dependente (C2)")
+
+                    if salvar_c2:
+                        erros_c2 = []
+                        if not nome_filho_c2.strip(): erros_c2.append("O nome da criança é obrigatório.")
+                        if not genero_c2: erros_c2.append("O gênero é obrigatório.")
+                        if not st.session_state.escolaridade: erros_c2.append("A escolaridade é obrigatória.")
+                        if not st.session_state.ano_escolar: erros_c2.append("O ano escolar é obrigatório.")
+                        if not certidao_c2 or not termo_tutela_c2: erros_c2.append("Documento(s) ausente(s) ou ilegível(is)")
+                            
+                        if erros_c2:
+                            for e in erros_c2: st.error(f"⚠️ {e}")
+                        else:
+                            with st.spinner("Analisando documentos com a IA... Aguarde"):
+                                dados_cert_c2, err_cert_c2 = analisa_certidao(certidao_c2)
+                                if err_cert_c2:
+                                    st.error(f"⚠️ {err_cert_c2}")
+                                else:
+                                    valido_cert_c2, msg_cert_c2 = valida_dados_crianca_certidao(dados_cert_c2, nome_filho_c2, data_nascimento_c2, genero_c2)
+                                    if not valido_cert_c2:
+                                        st.error(f"⚠️ {msg_cert_c2}")
+                                    else:
+                                        dados_tutela, err_tutela = analisa_tutela_judicial(termo_tutela_c2)
+                                        if err_tutela:
+                                            st.error(f"⚠️ {err_tutela}")
+                                        else:
+                                            if not dados_tutela.get("documento_valido") or not dados_tutela.get("legivel"):
+                                                st.error("⚠️ Documento(s) ausente(s) ou ilegível(is)")
+                                            elif not dados_tutela.get("autenticidade_judicial"):
+                                                st.error("⚠️ Documento sem comprovação de autenticidade judicial")
+                                            else:
+                                                nome_crianca_tutela = padroniza_texto(dados_tutela.get("nome_crianca", ""))
+                                                nome_crianca_cert_c2 = padroniza_texto(dados_cert_c2.get("nome_crianca", ""))
+                                                
+                                                if nome_crianca_tutela and nome_crianca_tutela not in nome_crianca_cert_c2 and nome_crianca_cert_c2 not in nome_crianca_tutela:
+                                                    st.error(f"⚠️ O nome da criança/adolescente no Termo de Tutela ({dados_tutela.get('nome_crianca')}) não confere com o da Certidão de Nascimento.")
+                                                else:
+                                                    nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                                    tutor_doc = padroniza_texto(dados_tutela.get("nome_tutor", ""))
+                                                    
+                                                    if nome_colab not in tutor_doc and tutor_doc not in nome_colab:
+                                                        st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta expressamente como o(a) TUTOR(A) nomeado(a) no documento judicial ({dados_tutela.get('nome_tutor')}).")
+                                                    else:
+                                                        db = SessionLocal()
+                                                        try:
+                                                            novo_dep = Dependente(
+                                                                id_colaborador=st.session_state.colaborador.get("id"),
+                                                                nome_filho=nome_crianca_cert_c2 or padroniza_texto(nome_filho_c2),
+                                                                data_nascimento=data_nascimento_c2,
+                                                                genero=genero_c2,
+                                                                escolaridade=st.session_state.escolaridade,
+                                                                ano_escola=st.session_state.ano_escolar,
+                                                                revisao_rh="Sim (Tutela Judicial C2)"
+                                                            )
+                                                            db.add(novo_dep)
+                                                            db.commit()
+                                                            db.refresh(novo_dep)
+                                                            st.success(f"✅ Dependente sob tutela judicial validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                            st.session_state.lista_dependentes.append({
+                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                            })
+                                                            st.session_state.aguardando_decisao = True
+                                                            st.rerun()
+                                                        finally:
+                                                            db.close()
 
 interface()                    
