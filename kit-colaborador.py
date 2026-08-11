@@ -23,6 +23,8 @@ from conector_Postgre import SupabaseConnector
 load_dotenv()
 client_gemini = genai.Client()  
 
+# CONFIGURAÇÃO DE IA: A1  Certidão de Nascimento - Filho(a) Biológico(a)
+
 generation_config_certidao = types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",
@@ -51,29 +53,82 @@ generation_config_certidao = types.GenerateContentConfig(
     }
 )
 #----------------------------------------------- busca documento  "casamento" ou "divorcio"
-generation_config_doc_complementar = types.GenerateContentConfig(
+
+# ---------------------------------------------------------------
+# CONFIGURAÇÃO DE IA: A2 (CERTIDÃO COM AVERBAÇÃO DE ADOÇÃO)
+# ---------------------------------------------------------------
+generation_config_adocao_averbacao = types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",
     system_instruction=(
-        "Você é um assistente especializado em extração de dados de documentos civis brasileiros.\n"
-        "Sua tarefa: analisar uma certidão de casamento ou divórcio.\n"
-        "Regra 1: Classifique 'documento_valido' como true se for certidão de casamento ou divórcio. Caso contrário, false.\n"
-        "Regra 2: Extraia o nome da pessoa ANTES e DEPOIS da mudança de nome.\n"
-        "Se for divórcio, o nome 'antes' é o nome de casada, 'depois' é o nome retomado.\n"
-        "Se for casamento, o nome 'antes' é o solteiro, 'depois' é o de casada.\n"
-        "OBS: NAO DAR RESPOSTA EXPLICATIVA"
+        "Você é um assistente rigoroso de auditoria de documentos civis (Certidão de Nascimento com averbação).\n"
+        "Regra 1: Verifique se o documento é uma Certidão de Nascimento válida. Classifique 'documento_valido' como true ou false.\n"
+        "Regra 2: Verifique se o documento está totalmente legível. Classifique 'legivel' como true ou false.\n"
+        "Regra 3: Verifique se existe explicitamente uma averbação, anotação, carimbo ou texto oficial informando a ADOÇÃO no documento. Classifique 'tem_averbacao_adocao' como true ou false.\n"
+        "Regra 4: Extraia o nome completo da criança registrada ('nome_crianca').\n"
+        "Regra 5: Extraia a data de nascimento da criança no formato DD/MM/AAAA ('data_nascimento_crianca').\n"
+        "Regra 6: Extraia o sexo da criança ('sexo_crianca': 'Masculino' ou 'Feminino').\n"
+        "Regra 7: Extraia a lista de nomes dos pais atuais (constantes na certidão ou na averbação de adoção) em uma lista de strings chamada 'nomes_pais_responsaveis'.\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
     ),
     response_schema={
         "type": "OBJECT",
         "properties": {
-            "documento_valido":  {"type": "BOOLEAN"},
-            "tipo_documento":    {"type": "STRING"},   
-            "nome_antes":        {"type": "STRING"},
-            "nome_depois":       {"type": "STRING"}
+            "documento_valido": {"type": "BOOLEAN"},
+            "legivel": {"type": "BOOLEAN"},
+            "tem_averbacao_adocao": {"type": "BOOLEAN"},
+            "nome_crianca": {"type": "STRING"},
+            "data_nascimento_crianca": {"type": "STRING"},
+            "sexo_crianca": {"type": "STRING", "enum": ["Masculino", "Feminino"]},
+            "nomes_pais_responsaveis": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"}
+            }
         },
-        "required": ["documento_valido", "tipo_documento", "nome_antes", "nome_depois"]
+        "required": [
+            "documento_valido", "legivel", "tem_averbacao_adocao", 
+            "nome_crianca", "data_nascimento_crianca", "sexo_crianca", "nomes_pais_responsaveis"
+        ]
     }
 )
+
+# ---------------------------------------------------------------
+# CONFIGURAÇÃO DE IA: A3 (GUARDA JUDICIAL PARA FINS DE ADOÇÃO)
+# ---------------------------------------------------------------
+generation_config_guarda_adocao = types.GenerateContentConfig(
+    temperature=0,
+    response_mime_type="application/json",
+    system_instruction=(
+        "Você é um auditor jurídico rigoroso de documentos judiciais (Termo de Guarda, Sentença ou Decisão Judicial para fins de adoção).\n"
+        "Regra 1: Verifique se o documento é de origem judicial válida (Termo de Guarda, Sentença, Decisão). Classifique 'documento_judicial_valido' como true ou false.\n"
+        "Regra 2: Verifique se o documento está legível e possui elementos de autenticidade (assinatura do juiz, carimbo oficial ou código de validação digital). Classifique 'legivel_e_autentico' como true ou false.\n"
+        "Regra 3: Verifique se o texto cita explicitamente que a guarda foi concedida para **Fins de Adoção** (ou estágio de convivência com finalidade adotiva). Classifique 'guarda_para_fins_de_adocao' como true ou false.\n"
+        "Regra 4: Extraia o nome completo da criança ou adolescente ('nome_crianca').\n"
+        "Regra 5: Extraia a data de nascimento da criança no formato DD/MM/AAAA, se houver ('data_nascimento_crianca'). Se não constar, retorne string vazia.\n"
+        "Regra 6: Extraia o nome completo do guardião/responsável legal nomeado no documento ('nome_guardiao').\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
+    ),
+    response_schema={
+        "type": "OBJECT",
+        "properties": {
+            "documento_judicial_valido": {"type": "BOOLEAN"},
+            "legivel_e_autentico": {"type": "BOOLEAN"},
+            "guarda_para_fins_de_adocao": {"type": "BOOLEAN"},
+            "nome_crianca": {"type": "STRING"},
+            "data_nascimento_crianca": {"type": "STRING"},
+            "nome_guardiao": {"type": "STRING"}
+        },
+        "required": [
+            "documento_judicial_valido", "legivel_e_autentico", 
+            "guarda_para_fins_de_adocao", "nome_crianca", "data_nascimento_crianca", "nome_guardiao"
+        ]
+    }
+)
+
+
+
+# CONFIGURAÇÃO DE IA: B1 Declaração de União Estável
+
 
 #--------------------------------------------------------------- busca documento  "uniao_estavel"
 generation_config_uniao_estavel = types.GenerateContentConfig(
@@ -101,6 +156,91 @@ generation_config_uniao_estavel = types.GenerateContentConfig(
 )
 
 
+# CONFIGURAÇÃO DE IA: B2: Certidão de Casamento + Certidão de Nascimento
+
+
+generation_config_doc_complementar = types.GenerateContentConfig(
+    temperature=0,
+    response_mime_type="application/json",
+    system_instruction=(
+        "Você é um assistente especializado em extração de dados de documentos civis brasileiros.\n"
+        "Sua tarefa: analisar uma certidão de casamento ou divórcio.\n"
+        "Regra 1: Classifique 'documento_valido' como true se for certidão de casamento ou divórcio. Caso contrário, false.\n"
+        "Regra 2: Extraia o nome da pessoa ANTES e DEPOIS da mudança de nome.\n"
+        "Se for divórcio, o nome 'antes' é o nome de casada, 'depois' é o nome retomado.\n"
+        "Se for casamento, o nome 'antes' é o solteiro, 'depois' é o de casada.\n"
+        "OBS: NAO DAR RESPOSTA EXPLICATIVA"
+    ),
+    response_schema={
+        "type": "OBJECT",
+        "properties": {
+            "documento_valido":  {"type": "BOOLEAN"},
+            "tipo_documento":    {"type": "STRING"},   
+            "nome_antes":        {"type": "STRING"},
+            "nome_depois":       {"type": "STRING"}
+        },
+        "required": ["documento_valido", "tipo_documento", "nome_antes", "nome_depois"]
+    }
+)
+
+# ---------------------------------------------------------------
+# CONFIGURAÇÃO DE IA: C1 (TERMO/CERTIDÃO DE GUARDA JUDICIAL)
+# ---------------------------------------------------------------
+generation_config_guarda_judicial = types.GenerateContentConfig(
+    temperature=0,
+    response_mime_type="application/json",
+    system_instruction=(
+        "Você é um auditor jurídico rigoroso de Termos ou Certidões de Guarda Judicial.\n"
+        "Regra 1: Verifique se o documento é um Termo ou Certidão de Guarda válido. Classifique 'documento_valido' como true ou false.\n"
+        "Regra 2: Verifique se o documento está totalmente legível. Classifique 'legivel' como true ou false.\n"
+        "Regra 3: Verifique se o documento possui assinatura do juiz, carimbo oficial ou código de validação digital. Classifique 'autenticidade_judicial' como true ou false.\n"
+        "Regra 4: Extraia o nome completo da criança ou adolescente mencionado no documento ('nome_crianca').\n"
+        "Regra 5: Extraia o nome completo do(a) guardião(ã) nomeado(a) no documento ('nome_guardiao').\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
+    ),
+    response_schema={
+        "type": "OBJECT",
+        "properties": {
+            "documento_valido": {"type": "BOOLEAN"},
+            "legivel": {"type": "BOOLEAN"},
+            "autenticidade_judicial": {"type": "BOOLEAN"},
+            "nome_crianca": {"type": "STRING"},
+            "nome_guardiao": {"type": "STRING"}
+        },
+        "required": ["documento_valido", "legivel", "autenticidade_judicial", "nome_crianca", "nome_guardiao"]
+    }
+)
+
+# ---------------------------------------------------------------
+# CONFIGURAÇÃO DE IA: C2 (TERMO DE TUTELA JUDICIAL)
+# ---------------------------------------------------------------
+generation_config_tutela_judicial = types.GenerateContentConfig(
+    temperature=0,
+    response_mime_type="application/json",
+    system_instruction=(
+        "Você é um auditor jurídico rigoroso de Termos de Tutela Judicial.\n"
+        "Regra 1: Verifique se o documento é um Termo de Tutela válido. Classifique 'documento_valido' como true ou false.\n"
+        "Regra 2: Verifique se o documento está totalmente legível. Classifique 'legivel' como true ou false.\n"
+        "Regra 3: Verifique se o documento possui assinatura do juiz, carimbo oficial ou código de validação digital. Classifique 'autenticidade_judicial' como true ou false.\n"
+        "Regra 4: Extraia o nome completo da criança ou adolescente mencionado no documento ('nome_crianca').\n"
+        "Regra 5: Extraia o nome completo do(a) tutor(a) nomeado(a) no documento ('nome_tutor').\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
+    ),
+    response_schema={
+        "type": "OBJECT",
+        "properties": {
+            "documento_valido": {"type": "BOOLEAN"},
+            "legivel": {"type": "BOOLEAN"},
+            "autenticidade_judicial": {"type": "BOOLEAN"},
+            "nome_crianca": {"type": "STRING"},
+            "nome_tutor": {"type": "STRING"}
+        },
+        "required": ["documento_valido", "legivel", "autenticidade_judicial", "nome_crianca", "nome_tutor"]
+    }
+)
+
+
+
 
 #---------------------------------------------------FUNCOES DE SISTEMA
 
@@ -111,24 +251,21 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
     print("Buscando colaborador no banco...")
     
     with st.form("form_busca"):
-        # Substituímos number_input por text_input para blindar contra o bug do Enter no Streamlit
         cracha_digitado = st.text_input("Crachá:", placeholder="Digite o número e aperte Enter")
         buscar = st.form_submit_button("🔍 Buscar")
         
     if not buscar:
         return None
         
-    # Previne o erro no SQL se o usuário apertar Enter com o campo vazio ou digitar letras
     if not cracha_digitado.strip() or not cracha_digitado.strip().isdigit():
         st.warning("⚠️ Por favor, digite um número de crachá válido antes de buscar.")
+        st.session_state.colaborador = None
         return None
         
-    # Só agora convertemos com segurança para número inteiro
     cracha_numero = int(cracha_digitado.strip())
     
     supabase_connector = SupabaseConnector()
     try:
-        # A query agora recebe a variável tratada
         query = f"""
         SELECT 
             cracha,
@@ -144,10 +281,12 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
         
         if not colaborador:
             st.error("⚠️ Crachá não encontrado na base de dados.")
+            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
             return None
             
         if colaborador["descricao_situacao"] in situacoes_invalidas:
             st.error(f"⚠️ Colaborador não elegível. Situação atual: {colaborador['descricao_situacao']}")
+            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
             return None
             
         # ==================== SALVA NO SESSION_STATE ====================
@@ -542,26 +681,126 @@ def avalia_caso_colaborador():
     st.subheader("📋 Validação de Vínculo do Dependente")
     st.write("Por favor, selecione a situação que melhor se aplica ao registro do seu dependente:")
     
-    # Criamos 3 colunas para acomodar os botões lado a lado de forma elegante
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("A) Filho registrado em meu nome", use_container_width=True):
+        if st.button("A) Filho(a) biológico(a) ou adotivo(a)", use_container_width=True):
             st.session_state.tipo_fluxo = "A"
             st.rerun()
             
     with col2:
-        if st.button("B) Filho registrado no nome de outra pessoa", use_container_width=True):
+        if st.button("B) Enteado(a) (Registrado no nome do cônjuge/companheiro)", use_container_width=True):
             st.session_state.tipo_fluxo = "B"
             st.rerun()
             
     with col3:
-        if st.button("C) Sou Divorciado(a)", use_container_width=True):
+        if st.button("C) Criança/Adolescente sob Guarda ou Tutela", use_container_width=True):
             st.session_state.tipo_fluxo = "C"
             st.rerun()
 
-
 #---------------------------------------------------FUNCOES DE validcao de documento
+def analisa_guarda_judicial(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "Documento(s) ausente(s) ou ilegível(is)"
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise este termo ou certidão de guarda judicial e extraia os dados conforme as regras."
+                ],
+                config=generation_config_guarda_judicial,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception:
+            if tentativa == tentativas:
+                return None, "Documento(s) ausente(s) ou ilegível(is)"
+    return None, "Documento(s) ausente(s) ou ilegível(is)"
+
+def analisa_tutela_judicial(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "Documento(s) ausente(s) ou ilegível(is)"
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise este termo de tutela judicial e extraia os dados conforme as regras."
+                ],
+                config=generation_config_tutela_judicial,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception:
+            if tentativa == tentativas:
+                return None, "Documento(s) ausente(s) ou ilegível(is)"
+    return None, "Documento(s) ausente(s) ou ilegível(is)"
+
+
+def analisa_certidao_averbacao(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "⚠️ Erro ao ler o arquivo. Tente novamente."
+    
+    mime_type = arquivo.type
+    ERROS_COM_RETRY = ("503", "timeout", "timed out", "429")
+    
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise esta certidão de nascimento com averbação de adoção e extraia os dados conforme as regras."
+                ],
+                config=generation_config_adocao_averbacao,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception as e:
+            if tentativa == tentativas:
+                return None, "⚠️ Serviço de validação indisponível no momento."
+    return None, "Não foi possível validar o documento."
+
+def analisa_guarda_adocao(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "⚠️ Erro ao ler o arquivo. Tente novamente."
+    
+    mime_type = arquivo.type
+    
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise este documento judicial de guarda para fins de adoção e extraia os dados conforme as regras."
+                ],
+                config=generation_config_guarda_adocao,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception as e:
+            if tentativa == tentativas:
+                return None, "⚠️ Serviço de validação judicial indisponível no momento."
+    return None, "Não foi possível validar o documento judicial."
+
+
+
 def analisa_uniao_estavel(arquivo, tentativas=3):
     try:
         arquivo.seek(0)
@@ -1060,228 +1299,682 @@ def interface():
         # ===================== FASE 2: TRIAGEM DE VÍNCULO (A, B, C) =====================
         st.success(f"👤 Colaborador: {st.session_state.colaborador['Nome']} | ✅ Contato salvo.")
         
-        # Se o usuário ainda não escolheu um caminho, exibe os 3 botões da triagem
+        # -------------------------------------------------------------------------
+        # TELAS DE CONTROLE UNIVERSAL (Oculta os formulários após salvar dependente)
+        # -------------------------------------------------------------------------
+        if st.session_state.cadastro_finalizado:
+            st.divider()
+            st.success("✅ Cadastro finalizado com sucesso! Obrigado.")
+            if st.session_state.escolhas_kits:
+                exibir_qrcode_final()
+            st.balloons()
+            return
+
+        if st.session_state.escolhendo_kits:
+            escolhas_kits = escolher_kits_colaborador()
+            if escolhas_kits is not None:
+                st.session_state.escolhas_kits = escolhas_kits
+                st.session_state.escolhendo_kits = False
+                st.session_state.cadastro_finalizado = True                                
+                st.rerun()
+            return
+
+        if st.session_state.aguardando_decisao:
+            st.divider()
+            st.subheader("✅ Dependente adicionado com sucesso!")
+            for i, dep in enumerate(st.session_state.lista_dependentes, start=1):
+                st.success(f"👦 {i}º dependente: {dep['Nome_filho']}")
+                
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("➕ Adicionar outro dependente", type="primary"):
+                    st.session_state.aguardando_decisao = False
+                    st.session_state.escolaridade = ""
+                    st.session_state.ano_escolar = ""
+                    st.session_state.aguardando_doc_complementar = False
+                    st.session_state.dados_certidao_filho = None
+                    st.session_state.dependente_temp = None
+                    st.session_state.tipo_fluxo = None # Reseta para a tela inicial de opções
+                    if 'sub_opcao_a' in st.session_state: del st.session_state['sub_opcao_a']
+                    if 'sub_opcao_b' in st.session_state: del st.session_state['sub_opcao_b']
+                    if 'sub_opcao_c' in st.session_state: del st.session_state['sub_opcao_c']
+                    st.rerun()
+            with col2:
+                if st.button("🚀 Finalizar cadastro"):
+                    st.session_state.aguardando_decisao = False
+                    st.session_state.escolhendo_kits = True
+                    st.rerun()
+            return
+
+        # -------------------------------------------------------------------------
+        # SELEÇÃO DO FLUXO PRINCIPAL
+        # -------------------------------------------------------------------------
         if st.session_state.tipo_fluxo is None:
             avalia_caso_colaborador()
             return
 
         # =========================================================================
-        # CAMINHO A: FLUXO NORMAL (Filho registrado em meu nome)
+        # CAMINHO A: FILHO(A) BIOLÓGICO(A) OU ADOTIVO(A)
         # =========================================================================
-        if st.session_state.tipo_fluxo == "A":
+        elif st.session_state.tipo_fluxo == "A":
+            st.subheader("📝 Cadastro - Filho(a) Biológico(a) ou Adotivo(a)")
             
-            # Botão opcional para voltar e trocar a opção de vínculo caso tenha errado
-            if st.button("⬅️ Voltar e trocar opção de vínculo"):
+            if st.button("⬅️ Voltar e escolher outra opção", key="voltar_a"):
                 st.session_state.tipo_fluxo = None
+                if 'sub_opcao_a' in st.session_state:
+                    del st.session_state['sub_opcao_a']
                 st.rerun()
 
-            # Cadastro já finalizado
-            if st.session_state.cadastro_finalizado:
-                st.divider()
-                st.success("✅ Cadastro finalizado com sucesso! Obrigado.")
-                if st.session_state.escolhas_kits:
-                    exibir_qrcode_final()
-                st.balloons()
-                return
+            st.write("---")
+            sub_opcao_a = st.radio(
+                "🎯 Selecione a forma de comprovação do vínculo:",
+                [
+                    "**A1:** Certidão de Nascimento - Filho(a) Biológico(a) ",
+                    "**A2:** Certidão de Nascimento com averbação de adoção",
+                    "**A3:** Documento judicial que comprove a guarda para fins de adoção"
+                ],
+                index=None,
+                key="sub_opcao_a"
+            )
 
-            # Escolha dos kits
-            if st.session_state.escolhendo_kits:
-                escolhas_kits = escolher_kits_colaborador()
-                if escolhas_kits is not None:
-                    st.session_state.escolhas_kits = escolhas_kits
-                    st.session_state.escolhendo_kits = False
-                    st.session_state.cadastro_finalizado = True                                
-                    st.rerun()
-                return
-
-            # Aguardando decisão após adicionar dependente
-            if st.session_state.aguardando_decisao:
+            # Só exibe se o usuário selecionar uma opção
+            if sub_opcao_a:
                 st.divider()
-                st.subheader("✅ Dependente adicionado com sucesso!")
-                for i, dep in enumerate(st.session_state.lista_dependentes, start=1):
-                    st.success(f"👦 {i}º dependente: {dep['Nome_filho']}")
+                
+                # --- SUB-FLUXO A1 ---
+                if "A1" in sub_opcao_a:
+                    dependente = adicionar_dependentes()
+                    if dependente is not None:
+                        st.session_state.lista_dependentes.append(dependente)
+                        st.session_state.aguardando_decisao = True
+                        st.rerun()
+
+                # --- SUB-FLUXOS A2 e A3 (Exigem seleção prévia de Escolaridade) ---
+                elif "A2" in sub_opcao_a or "A3" in sub_opcao_a:
+                    if 'escolaridade' not in st.session_state: st.session_state.escolaridade = ""
+                    if 'ano_escolar' not in st.session_state: st.session_state.ano_escolar = ""
+
+                    st.selectbox("Escolaridade", ["", "Educação Infantil", "Ensino Fundamental I", "Ensino Fundamental II", "Ensino Médio"], format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x, key="escolaridade")
                     
-                col1, col2 = st.columns([1, 1])
-                with col1:
-                    if st.button("➕ Adicionar outro dependente", type="primary"):
-                        st.session_state.aguardando_decisao = False
-                        st.session_state.escolaridade = ""
-                        st.session_state.ano_escolar = ""
-                        st.session_state.aguardando_doc_complementar = False
-                        st.session_state.dados_certidao_filho = None
-                        st.session_state.dependente_temp = None
-                        st.rerun()
-                with col2:
-                    if st.button("🚀 Finalizar cadastro"):
-                        st.session_state.aguardando_decisao = False
-                        st.session_state.escolhendo_kits = True
-                        st.rerun()
-                return
+                    opcoes_ano = {
+                        "": [],
+                        "Educação Infantil":    ["", "Maternal I", "Maternal II", "Etapa I", "Etapa II"],
+                        "Ensino Fundamental I": ["", "1º Ano", "2º Ano", "3º Ano", "4º Ano", "5º Ano"],
+                        "Ensino Fundamental II":["", "6º Ano", "7º Ano", "8º Ano", "9º Ano"],
+                        "Ensino Médio":         ["", "1º Ano", "2º Ano", "3º Ano"]
+                    }
+                    
+                    if st.session_state.escolaridade:
+                        st.selectbox("Ano Escolar 2026", opcoes_ano[st.session_state.escolaridade], format_func=lambda x: "Selecione o Ano Escolar..." if x == "" else x, key="ano_escolar")
 
-            # Fluxo normal - formulário de adicionar dependente
-            dependente = adicionar_dependentes()
-            if dependente is not None:
-                st.session_state.lista_dependentes.append(dependente)
-                st.session_state.aguardando_decisao = True
-                st.rerun()
+                    st.write("---")
+
+                    # --- SUB-FLUXO A2 FORMULÁRIO ---
+                    if "A2" in sub_opcao_a:
+                        with st.form("form_fluxo_a2"):
+                            st.info("📌 Requisitos (A2): Envie a **Certidão de Nascimento** contendo explicitamente a averbação de adoção.")
+                            
+                            nome_filho_a2 = st.text_input("Nome Completo da Criança")
+                            genero_a2 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
+                            
+                            data_maxima_a2 = date.today() - timedelta(days=730)
+                            data_nascimento_a2 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_a2, format="DD/MM/YYYY")
+                            
+                            certidao_averbada = st.file_uploader("Anexar Certidão com Averbação de Adoção", type=["pdf", "png", "jpg", "jpeg"], key="cert_a2")
+                            
+                            salvar_a2 = st.form_submit_button("Validar e Adicionar Dependente (A2)")
+
+                        if salvar_a2:
+                            erros_a2 = []
+                            if not nome_filho_a2.strip(): erros_a2.append("O nome da criança é obrigatório.")
+                            if not genero_a2: erros_a2.append("O gênero é obrigatório.")
+                            if not st.session_state.escolaridade: erros_a2.append("A escolaridade é obrigatória.")
+                            if not st.session_state.ano_escolar: erros_a2.append("O ano escolar é obrigatório.")
+                            if not certidao_averbada: erros_a2.append("A certidão com averbação é obrigatória.")
+                                
+                            if erros_a2:
+                                for e in erros_a2: st.error(f"⚠️ {e}")
+                            else:
+                                with st.spinner("Analisando certidão com averbação via IA... Aguarde"):
+                                    dados_a2, err_a2 = analisa_certidao_averbacao(certidao_averbada)
+                                    if err_a2:
+                                        st.error(f"⚠️ {err_a2}")
+                                    else:
+                                        if not dados_a2.get("documento_valido"):
+                                            st.error("⚠️ Documento adicionado não é uma certidão de nascimento.")
+                                        elif not dados_a2.get("legivel"):
+                                            st.error("⚠️ Documento está ilegível, carregue outro.")
+                                        elif not dados_a2.get("tem_averbacao_adocao"):
+                                            st.error("⚠️ O documento não possui a averbação de adoção exigida.")
+                                        else:
+                                            nome_cert_a2 = padroniza_texto(dados_a2.get("nome_crianca", ""))
+                                            nome_form_a2 = padroniza_texto(nome_filho_a2)
+                                            sexo_cert_a2 = padroniza_texto(dados_a2.get("sexo_crianca", ""))
+                                            sexo_form_a2 = padroniza_texto(genero_a2)
+                                            
+                                            data_cert_str = (dados_a2.get("data_nascimento_crianca") or "").strip()
+                                            
+                                            if nome_cert_a2 != nome_form_a2:
+                                                st.error(f"⚠️ Nome informado não confere com a certidão. Consta: {dados_a2.get('nome_crianca')}")
+                                            elif sexo_cert_a2 != sexo_form_a2:
+                                                st.error(f"⚠️ O sexo informado não corresponde ao encontrado na certidão.")
+                                            elif data_cert_str:
+                                                try:
+                                                    data_cert_obj = datetime.strptime(data_cert_str, "%d/%m/%Y").date()
+                                                    if data_cert_obj != data_nascimento_a2:
+                                                        st.error(f"⚠️ A data de nascimento informada não confere com a certidão ({data_cert_str}).")
+                                                        data_cert_obj = None
+                                                except ValueError:
+                                                    data_cert_obj = data_nascimento_a2
+                                            else:
+                                                data_cert_obj = data_nascimento_a2
+
+                                            if data_cert_obj:
+                                                nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                                pais_responsaveis = [padroniza_texto(p) for p in dados_a2.get("nomes_pais_responsaveis", [])]
+                                                
+                                                if nome_colab not in pais_responsaveis:
+                                                    st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como pai/mãe na certidão ou na averbação de adoção.")
+                                                else:
+                                                    db = SessionLocal()
+                                                    try:
+                                                        novo_dep = Dependente(
+                                                            id_colaborador=st.session_state.colaborador.get("id"),
+                                                            nome_filho=nome_cert_a2 or nome_form_a2,
+                                                            data_nascimento=data_nascimento_a2,
+                                                            genero=genero_a2,
+                                                            escolaridade=st.session_state.escolaridade,
+                                                            ano_escola=st.session_state.ano_escolar,
+                                                            revisao_rh="Sim (Adoção A2)"
+                                                        )
+                                                        db.add(novo_dep)
+                                                        db.commit()
+                                                        db.refresh(novo_dep)
+                                                        st.success(f"✅ Dependente por adoção validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                        st.session_state.lista_dependentes.append({
+                                                            "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                            "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                        })
+                                                        st.session_state.aguardando_decisao = True
+                                                        st.rerun()
+                                                    finally:
+                                                        db.close()
+
+                    # --- SUB-FLUXO A3 FORMULÁRIO ---
+                    elif "A3" in sub_opcao_a:
+                        with st.form("form_fluxo_a3"):
+                            st.info("📌 Requisitos (A3): Envie o **Termo de Guarda e Responsabilidade ou Decisão Judicial** especificando a guarda para fins de adoção.")
+                            
+                            nome_filho_a3 = st.text_input("Nome Completo da Criança / Adolescente")
+                            
+                            data_maxima_a3 = date.today() - timedelta(days=730)
+                            data_nascimento_a3 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_a3, format="DD/MM/YYYY")
+                            
+                            doc_judicial = st.file_uploader("Anexar Documento Judicial (Guarda para Fins de Adoção)", type=["pdf", "png", "jpg", "jpeg"], key="doc_a3")
+                            
+                            salvar_a3 = st.form_submit_button("Validar e Adicionar Dependente (A3)")
+
+                        if salvar_a3:
+                            erros_a3 = []
+                            if not nome_filho_a3.strip(): erros_a3.append("O nome da criança é obrigatório.")
+                            if not st.session_state.escolaridade: erros_a3.append("A escolaridade é obrigatória.")
+                            if not st.session_state.ano_escolar: erros_a3.append("O ano escolar é obrigatório.")
+                            if not doc_judicial: erros_a3.append("O documento judicial é obrigatório.")
+                                
+                            if erros_a3:
+                                for e in erros_a3: st.error(f"⚠️ {e}")
+                            else:
+                                with st.spinner("Analisando documento judicial via IA... Aguarde"):
+                                    dados_a3, err_a3 = analisa_guarda_adocao(doc_judicial)
+                                    if err_a3:
+                                        st.error(f"⚠️ {err_a3}")
+                                    else:
+                                        if not dados_a3.get("documento_judicial_valido"):
+                                            st.error("⚠️ Documento adicionado não possui validade judicial.")
+                                        elif not dados_a3.get("legivel_e_autentico"):
+                                            st.error("⚠️ Documento ilegível ou sem comprovação de autenticidade.")
+                                        elif not dados_a3.get("guarda_para_fins_de_adocao"):
+                                            st.error("⚠️ O documento não especifica que a guarda é provisória/definitiva para fins de adoção.")
+                                        else:
+                                            nome_doc_a3 = padroniza_texto(dados_a3.get("nome_crianca", ""))
+                                            nome_form_a3 = padroniza_texto(nome_filho_a3)
+                                            
+                                            if nome_doc_a3 and nome_doc_a3 not in nome_form_a3 and nome_form_a3 not in nome_doc_a3:
+                                                st.error(f"⚠️ O nome da criança no documento judicial ({dados_a3.get('nome_crianca')}) não confere com o informado.")
+                                            else:
+                                                nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                                guardiao_doc = padroniza_texto(dados_a3.get("nome_guardiao", ""))
+                                                
+                                                if nome_colab not in guardiao_doc and guardiao_doc not in nome_colab:
+                                                    st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não bate com o nome do guardião nomeado no documento ({dados_a3.get('nome_guardiao')}).")
+                                                else:
+                                                    db = SessionLocal()
+                                                    try:
+                                                        novo_dep = Dependente(
+                                                            id_colaborador=st.session_state.colaborador.get("id"),
+                                                            nome_filho=nome_doc_a3 or nome_form_a3,
+                                                            data_nascimento=data_nascimento_a3,
+                                                            genero="Não informado",
+                                                            escolaridade=st.session_state.escolaridade,
+                                                            ano_escola=st.session_state.ano_escolar,
+                                                            revisao_rh="Sim (Guarda para Adoção A3)"
+                                                        )
+                                                        db.add(novo_dep)
+                                                        db.commit()
+                                                        db.refresh(novo_dep)
+                                                        st.success(f"✅ Dependente sob guarda para adoção cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                        st.session_state.lista_dependentes.append({
+                                                            "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                            "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                        })
+                                                        st.session_state.aguardando_decisao = True
+                                                        st.rerun()
+                                                    finally:
+                                                        db.close()
 
         # =========================================================================
-        # CAMINHO B: FILHO REGISTRADO NO NOME DE OUTRA PESSOA (UNIÃO ESTÁVEL)
+        # CAMINHO B: ENTEADO(A) (REGISTRADO NO NOME DE OUTRA PESSOA)
         # =========================================================================
         elif st.session_state.tipo_fluxo == "B":
-            st.subheader("📝 Cadastro via União Estável")
-            st.write(f"Nome Responsável: {st.session_state.colaborador['Nome']}")
+            st.subheader("📝 Cadastro de Enteado(a)")
             
-            if st.button("⬅️ Voltar e escolher outra opção"):
+            if st.button("⬅️ Voltar e escolher outra opção", key="voltar_b"):
                 st.session_state.tipo_fluxo = None
+                if 'sub_opcao_b' in st.session_state:
+                    del st.session_state['sub_opcao_b']
                 st.rerun()
-
-            # Reaproveitamos a seleção de escolaridade igual ao fluxo normal
-            if 'escolaridade' not in st.session_state:
-                st.session_state.escolaridade = ""
-            if 'ano_escolar' not in st.session_state:
-                st.session_state.ano_escolar = ""
-
-            st.selectbox(
-                "Escolaridade",
-                ["", "Educação Infantil", "Ensino Fundamental I", "Ensino Fundamental II", "Ensino Médio"],
-                format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x,
-                key="escolaridade"
+            
+            st.write("---")
+            sub_opcao_b = st.radio(
+                "🎯 Selecione o documento para comprovação do vínculo com o cônjuge/companheiro(a):",
+                [
+                    "**B1:** Declaração de União Estável + Certidão de Nascimento Filho(a)",
+                    "**B2:** Certidão de Casamento + Certidão de Nascimento Filho(a)"
+                ],
+                index=None,
+                key="sub_opcao_b"
             )
-            
-            opcoes_ano = {
-                "": [],
-                "Educação Infantil":    ["", "Maternal I", "Maternal II", "Etapa I", "Etapa II"],
-                "Ensino Fundamental I": ["", "1º Ano", "2º Ano", "3º Ano", "4º Ano", "5º Ano"],
-                "Ensino Fundamental II":["", "6º Ano", "7º Ano", "8º Ano", "9º Ano"],
-                "Ensino Médio":         ["", "1º Ano", "2º Ano", "3º Ano"]
-            }
-            
-            if st.session_state.escolaridade:
-                st.selectbox(
-                    "Ano Escolar 2026",
-                    opcoes_ano[st.session_state.escolaridade],
-                    format_func=lambda x: "Selecione o Ano Escolar..." if x == "" else x,
-                    key="ano_escolar"
-                )
 
-            with st.form("form_fluxo_b"):
-                st.info("📌 Requisitos: Envie a **Certidão de Nascimento da Criança** e a **Declaração de União Estável** com firma reconhecida em **São José do Rio Preto**.")
-                
-                nome_filho_b = st.text_input("Nome Completo da Criança")
-                genero_b = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
-                
-                data_maxima_b = date.today() - timedelta(days=730)
-                data_nascimento_b = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_b, format="DD/MM/YYYY")
-                
-                certidao_b = st.file_uploader("Anexar Certidão de Nascimento", type=["pdf", "png", "jpg", "jpeg"])
-                uniao_b = st.file_uploader("Anexar União Estável (com firma reconhecida em SJ Rio Preto)", type=["pdf", "png", "jpg", "jpeg"])
-                
-                salvar_b = st.form_submit_button("Validar e Adicionar Dependente")
+            # Só exibe o formulário e a seleção de escolaridade se o usuário clicar
+            if sub_opcao_b:
+                st.divider()
+                if 'escolaridade' not in st.session_state: st.session_state.escolaridade = ""
+                if 'ano_escolar' not in st.session_state: st.session_state.ano_escolar = ""
 
-            if salvar_b:
-                erros_b = []
-                if not nome_filho_b.strip():
-                    erros_b.append("O nome da criança é obrigatório.")
-                if not genero_b:
-                    erros_b.append("O gênero é obrigatório.")
-                if not st.session_state.escolaridade:
-                    erros_b.append("A escolaridade é obrigatória.")
-                if not st.session_state.ano_escolar:
-                    erros_b.append("O ano escolar é obrigatório.")
-                if not certidao_b:
-                    erros_b.append("A certidão de nascimento é obrigatória.")
-                if not uniao_b:
-                    erros_b.append("A declaração de união estável é obrigatória.")
-                    
-                if erros_b:
-                    for e in erros_b:
-                        st.error(f"⚠️ {e}")
-                else:
-                    with st.spinner("Analisando documentos com a IA... Aguarde"):
-                        # 1. Analisa a Certidão de Nascimento
-                        dados_cert, err_cert = analisa_certidao(certidao_b)
-                        if err_cert:
-                            st.error(f"⚠️ {err_cert}")
+                st.selectbox("Escolaridade", ["", "Educação Infantil", "Ensino Fundamental I", "Ensino Fundamental II", "Ensino Médio"], format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x, key="escolaridade")
+                
+                opcoes_ano = {
+                    "": [],
+                    "Educação Infantil":    ["", "Maternal I", "Maternal II", "Etapa I", "Etapa II"],
+                    "Ensino Fundamental I": ["", "1º Ano", "2º Ano", "3º Ano", "4º Ano", "5º Ano"],
+                    "Ensino Fundamental II":["", "6º Ano", "7º Ano", "8º Ano", "9º Ano"],
+                    "Ensino Médio":         ["", "1º Ano", "2º Ano", "3º Ano"]
+                }
+                
+                if st.session_state.escolaridade:
+                    st.selectbox("Ano Escolar 2026", opcoes_ano[st.session_state.escolaridade], format_func=lambda x: "Selecione o Ano Escolar..." if x == "" else x, key="ano_escolar")
+
+                # --- FORMA B1 ---
+                if "B1" in sub_opcao_b:
+                    with st.form("form_fluxo_b1"):
+                        st.info("📌 Requisitos : Envie a **Certidão de Nascimento da Criança** e a **Declaração de União Estável** com firma reconhecida .")
+                        nome_filho_b = st.text_input("Nome Completo da Criança")
+                        genero_b = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
+                        data_nascimento_b = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=date.today() - timedelta(days=730), format="DD/MM/YYYY")
+                        certidao_b = st.file_uploader("Anexar Certidão de Nascimento", type=["pdf", "png", "jpg", "jpeg"], key="cert_b1")
+                        uniao_b = st.file_uploader("Anexar União Estável (com firma reconhecida em SJ Rio Preto)", type=["pdf", "png", "jpg", "jpeg"], key="doc_b1")
+                        salvar_b1 = st.form_submit_button("Validar e Adicionar Dependente (B1)")
+
+                    if salvar_b1:
+                        erros_b = []
+                        if not nome_filho_b.strip(): erros_b.append("O nome da criança é obrigatório.")
+                        if not genero_b: erros_b.append("O gênero é obrigatório.")
+                        if not st.session_state.escolaridade: erros_b.append("A escolaridade é obrigatória.")
+                        if not st.session_state.ano_escolar: erros_b.append("O ano escolar é obrigatório.")
+                        if not certidao_b: erros_b.append("A certidão de nascimento é obrigatória.")
+                        if not uniao_b: erros_b.append("A declaração de união estável é obrigatória.")
+                            
+                        if erros_b:
+                            for e in erros_b: st.error(f"⚠️ {e}")
                         else:
-                            # 2. Analisa a União Estável
-                            dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
-                            if err_uniao:
-                                st.error(f"⚠️ {err_uniao}")
-                            else:
-                                # Regras de Validação Rigorosas do Caminho B
-                                if not dados_uniao.get("documento_valido"):
-                                    st.error("⚠️ O documento anexado não é uma Declaração de União Estável válida.")
-                                
-                                # Trava de Reconhecimento de Firma
-                                elif not dados_uniao.get("firma_reconhecida"):
-                                    st.error("⚠️ É NECESSÁRIO RECONHECER FIRMA")
-                                    
-                                # Trava de Cidade (São José do Rio Preto)
-                                elif not dados_uniao.get("cartorio_rio_preto"):
-                                    st.error("⚠️ O reconhecimento de firma precisa ser obrigatoriamente em um cartório de São José do Rio Preto.")
+                            with st.spinner("Analisando documentos com a IA... Aguarde"):
+                                dados_cert, err_cert = analisa_certidao(certidao_b)
+                                if err_cert:
+                                    st.error(f"⚠️ {err_cert}")
                                 else:
-                                    # Valida se o colaborador faz parte da união estável
-                                    nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                    comp1 = padroniza_texto(dados_uniao.get("nome_companheiro_1", ""))
-                                    comp2 = padroniza_texto(dados_uniao.get("nome_companheiro_2", ""))
-                                    
-                                    colaborador_na_uniao = (nome_colab == comp1 or nome_colab == comp2)
-                                    
-                                    if not colaborador_na_uniao:
-                                        st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como convivente na União Estável apresentada.")
+                                    dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
+                                    if err_uniao:
+                                        st.error(f"⚠️ {err_uniao}")
                                     else:
-                                        # Identifica quem é o companheiro(a) do colaborador
-                                        parceiro = comp2 if nome_colab == comp1 else comp1
-                                        
-                                        # Valida se o companheiro(a) é o pai ou a mãe na certidão da criança
-                                        mae_cert = padroniza_texto(dados_cert.get("nome_mae", ""))
-                                        pai_cert = padroniza_texto(dados_cert.get("nome_pai", ""))
-                                        
-                                        parceiro_na_certidao = (parceiro == mae_cert or parceiro == pai_cert)
-                                        
-                                        if not parceiro_na_certidao:
-                                            st.error("⚠️ O nome do companheiro(a) presente na União Estável não confere com os pais registrados na Certidão de Nascimento da criança.")
+                                        if not dados_uniao.get("documento_valido"):
+                                            st.error("⚠️ O documento anexado não é uma Declaração de União Estável válida.")
+                                        elif not dados_uniao.get("firma_reconhecida"):
+                                            st.error("⚠️ É NECESSÁRIO RECONHECER FIRMA")
                                         else:
-                                            # Se passou por todas as travas, salva no banco com sinalização de revisão do RH
-                                            db = SessionLocal()
-                                            try:
-                                                novo_dep = Dependente(
-                                                    id_colaborador=st.session_state.colaborador.get("id"),
-                                                    nome_filho=padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b),
-                                                    data_nascimento=data_nascimento_b,
-                                                    genero=genero_b,
-                                                    escolaridade=st.session_state.escolaridade,
-                                                    ano_escola=st.session_state.ano_escolar,
-                                                    revisao_rh="Sim (União Estável - Rio Preto)"
-                                                )
-                                                db.add(novo_dep)
-                                                db.commit()
-                                                db.refresh(novo_dep)
+                                            nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                            comp1 = padroniza_texto(dados_uniao.get("nome_companheiro_1", ""))
+                                            comp2 = padroniza_texto(dados_uniao.get("nome_companheiro_2", ""))
+                                            
+                                            if not (nome_colab == comp1 or nome_colab == comp2):
+                                                st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como convivente na União Estável apresentada.")
+                                            else:
+                                                companheiro = comp2 if nome_colab == comp1 else comp1
+                                                mae_cert = padroniza_texto(dados_cert.get("nome_mae", ""))
+                                                pai_cert = padroniza_texto(dados_cert.get("nome_pai", ""))
                                                 
-                                                st.success(f"✅ Dependente validado e cadastrado com sucesso via União Estável! ID: {novo_dep.id_dependente}")
+                                                if nome_colab == mae_cert or nome_colab == pai_cert:
+                                                    st.error("⚠️ Consta que você é o pai/mãe registrado nesta certidão. Para este caso, utilize a Opção 'A' (Filho biológico ou adotivo).")
+                                                elif not (companheiro == mae_cert or companheiro == pai_cert):
+                                                    st.error(f"⚠️ O nome do(a) companheiro(a) na União Estável ({companheiro}) não confere com os pais registrados na Certidão de Nascimento da criança ({mae_cert} / {pai_cert}).")
+                                                else:
+                                                    db = SessionLocal()
+                                                    try:
+                                                        novo_dep = Dependente(
+                                                            id_colaborador=st.session_state.colaborador.get("id"),
+                                                            nome_filho=padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b),
+                                                            data_nascimento=data_nascimento_b,
+                                                            genero=genero_b,
+                                                            escolaridade=st.session_state.escolaridade,
+                                                            ano_escola=st.session_state.ano_escolar,
+                                                            revisao_rh="Sim (Enteado - União Estável B1)"
+                                                        )
+                                                        db.add(novo_dep)
+                                                        db.commit()
+                                                        db.refresh(novo_dep)
+                                                        st.success(f"✅ Dependente validado e cadastrado com sucesso via União Estável! ID: {novo_dep.id_dependente}")
+                                                        st.session_state.lista_dependentes.append({
+                                                            "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                            "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                        })
+                                                        st.session_state.aguardando_decisao = True
+                                                        st.rerun()
+                                                    finally:
+                                                        db.close()
+
+                # --- FORMA B2 ---
+                elif "B2" in sub_opcao_b:
+                    with st.form("form_fluxo_b2"):
+                        st.info("📌 Requisitos (B2): Envie a **Certidão de Nascimento da Criança** e a **Certidão de Casamento** (sem averbação de divórcio).")
+                        nome_filho_b2 = st.text_input("Nome Completo da Criança")
+                        genero_b2 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
+                        data_nascimento_b2 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=date.today() - timedelta(days=730), format="DD/MM/YYYY")
+                        certidao_b2 = st.file_uploader("Anexar Certidão de Nascimento da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_b2")
+                        casamento_b2 = st.file_uploader("Anexar Certidão de Casamento", type=["pdf", "png", "jpg", "jpeg"], key="doc_b2")
+                        salvar_b2 = st.form_submit_button("Validar e Adicionar Dependente (B2)")
+
+                    if salvar_b2:
+                        erros_b2 = []
+                        if not nome_filho_b2.strip(): erros_b2.append("O nome da criança é obrigatório.")
+                        if not genero_b2: erros_b2.append("O gênero é obrigatório.")
+                        if not st.session_state.escolaridade: erros_b2.append("A escolaridade é obrigatória.")
+                        if not st.session_state.ano_escolar: erros_b2.append("O ano escolar é obrigatório.")
+                        if not certidao_b2: erros_b2.append("A certidão de nascimento é obrigatória.")
+                        if not casamento_b2: erros_b2.append("A certidão de casamento é obrigatória.")
+                            
+                        if erros_b2:
+                            for e in erros_b2: st.error(f"⚠️ {e}")
+                        else:
+                            with st.spinner("Analisando documentos com a IA... Aguarde"):
+                                dados_cert, err_cert = analisa_certidao(certidao_b2)
+                                if err_cert:
+                                    st.error(f"⚠️ {err_cert}")
+                                else:
+                                    dados_casam, err_casam = analisa_certidao_complementar(casamento_b2)
+                                    if err_casam:
+                                        st.error(f"⚠️ {err_casam}")
+                                    else:
+                                        tipo_doc = str(dados_casam.get("tipo_documento", "")).lower()
+                                        if not dados_casam.get("documento_valido"):
+                                            st.error("⚠️ O documento anexado não é uma Certidão de Casamento válida.")
+                                        elif "divórcio" in tipo_doc or "divorcio" in tipo_doc:
+                                            st.error("⚠️ Certidão indica divórcio, vínculo inválido.")
+                                        else:
+                                            nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                            nome_antes = padroniza_texto(dados_casam.get("nome_antes", ""))
+                                            nome_depois = padroniza_texto(dados_casam.get("nome_depois", ""))
+                                            
+                                            if not (nome_colab == nome_antes or nome_colab == nome_depois):
+                                                st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta na Certidão de Casamento apresentada.")
+                                            else:
+                                                conjuge = nome_depois if nome_colab == nome_antes else nome_antes
+                                                mae_cert = padroniza_texto(dados_cert.get("nome_mae", ""))
+                                                pai_cert = padroniza_texto(dados_cert.get("nome_pai", ""))
                                                 
-                                                # Salva no estado temporário para avançar para a escolha de kits
-                                                st.session_state.lista_dependentes.append({
-                                                    "ID_Dependente": novo_dep.id_dependente,
-                                                    "Nome_filho": novo_dep.nome_filho,
-                                                    "Gênero": novo_dep.genero,
-                                                    "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"),
-                                                    "Escolaridade": novo_dep.escolaridade,
-                                                    "Ano_escolar": novo_dep.ano_escola
-                                                })
-                                                st.session_state.aguardando_decisao = True
-                                                st.rerun()
-                                            finally:
-                                                db.close()
+                                                if nome_colab == mae_cert or nome_colab == pai_cert:
+                                                    st.error("⚠️ Consta que você é o pai/mãe registrado nesta certidão. Para este caso, utilize a Opção 'A' (Filho biológico ou adotivo).")
+                                                elif not (conjuge == mae_cert or conjuge == pai_cert or nome_antes == mae_cert or nome_antes == pai_cert or nome_depois == mae_cert or nome_depois == pai_cert):
+                                                    st.error(f"⚠️ O nome do(a) cônjuge na Certidão de Casamento não confere com os pais registrados na Certidão de Nascimento ({mae_cert} / {pai_cert}).")
+                                                else:
+                                                    db = SessionLocal()
+                                                    try:
+                                                        novo_dep = Dependente(
+                                                            id_colaborador=st.session_state.colaborador.get("id"),
+                                                            nome_filho=padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b2),
+                                                            data_nascimento=data_nascimento_b2,
+                                                            genero=genero_b2,
+                                                            escolaridade=st.session_state.escolaridade,
+                                                            ano_escola=st.session_state.ano_escolar,
+                                                            revisao_rh="Sim (Enteado - Casamento B2)"
+                                                        )
+                                                        db.add(novo_dep)
+                                                        db.commit()
+                                                        db.refresh(novo_dep)
+                                                        st.success(f"✅ Dependente validado e cadastrado com sucesso via Certidão de Casamento! ID: {novo_dep.id_dependente}")
+                                                        st.session_state.lista_dependentes.append({
+                                                            "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                            "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                        })
+                                                        st.session_state.aguardando_decisao = True
+                                                        st.rerun()
+                                                    finally:
+                                                        db.close()
+
         # =========================================================================
-        # CAMINHO C: DIVORCIADO(A)
+        # CAMINHO C: CRIANÇA OU ADOLESCENTE SOB GUARDA OU TUTELA
+        # =========================================================================
+        # =========================================================================
+        # CAMINHO C: CRIANÇA OU ADOLESCENTE SOB GUARDA OU TUTELA (C1 e C2)
         # =========================================================================
         elif st.session_state.tipo_fluxo == "C":
-            st.info("🔄 Fluxo C selecionado: Em breve vamos refazer e corrigir a validação da Certidão de Divórcio/Casamento.")
-            if st.button("⬅️ Voltar e escolher outra opção"):
+            st.subheader("📝 Cadastro - Criança ou Adolescente sob Guarda ou Tutela")
+            
+            if st.button("⬅️ Voltar e escolher outra opção", key="voltar_c"):
                 st.session_state.tipo_fluxo = None
+                if 'sub_opcao_c' in st.session_state:
+                    del st.session_state['sub_opcao_c']
                 st.rerun()
 
-# Chamada da função que roda o app
-interface()
+            st.write("---")
+            sub_opcao_c = st.radio(
+                "🎯 Selecione o documento judicial de responsabilidade:",
+                [
+                    "**C1:** Termo/Certidão de Guarda Judicial + Certidão de Nascimento",
+                    "**C2:** Termo de Tutela Judicial + Certidão de Nascimento"
+                ],
+                index=None,
+                key="sub_opcao_c"
+            )
+
+            if sub_opcao_c:
+                st.divider()
+                if 'escolaridade' not in st.session_state: st.session_state.escolaridade = ""
+                if 'ano_escolar' not in st.session_state: st.session_state.ano_escolar = ""
+
+                st.selectbox("Escolaridade", ["", "Educação Infantil", "Ensino Fundamental I", "Ensino Fundamental II", "Ensino Médio"], format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x, key="escolaridade")
+                
+                opcoes_ano = {
+                    "": [],
+                    "Educação Infantil":    ["", "Maternal I", "Maternal II", "Etapa I", "Etapa II"],
+                    "Ensino Fundamental I": ["", "1º Ano", "2º Ano", "3º Ano", "4º Ano", "5º Ano"],
+                    "Ensino Fundamental II":["", "6º Ano", "7º Ano", "8º Ano", "9º Ano"],
+                    "Ensino Médio":         ["", "1º Ano", "2º Ano", "3º Ano"]
+                }
+                
+                if st.session_state.escolaridade:
+                    st.selectbox("Ano Escolar 2026", opcoes_ano[st.session_state.escolaridade], format_func=lambda x: "Selecione o Ano Escolar..." if x == "" else x, key="ano_escolar")
+
+                st.write("---")
+
+                # ==================== SUB-FLUXO C1: GUARDA JUDICIAL ====================
+                if "C1" in sub_opcao_c:
+                    with st.form("form_fluxo_c1"):
+                        st.info("📌 Requisitos (C1): Anexe o **Termo/Certidão de Guarda Judicial** E a **Certidão de Nascimento da Criança**.")
+                        
+                        nome_filho_c1 = st.text_input("Nome Completo da Criança / Adolescente")
+                        genero_c1 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x, key="genero_c1")
+                        
+                        data_maxima_c1 = date.today() - timedelta(days=730)
+                        data_nascimento_c1 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_c1, format="DD/MM/YYYY", key="dt_c1")
+                        
+                        certidao_c1 = st.file_uploader("Anexar Certidão de Nascimento da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_c1")
+                        termo_guarda_c1 = st.file_uploader("Anexar Termo/Certidão de Guarda Judicial", type=["pdf", "png", "jpg", "jpeg"], key="termo_guarda_c1")
+                        
+                        salvar_c1 = st.form_submit_button("Validar e Adicionar Dependente (C1)")
+
+                    if salvar_c1:
+                        erros_c1 = []
+                        if not nome_filho_c1.strip(): erros_c1.append("O nome da criança é obrigatório.")
+                        if not genero_c1: erros_c1.append("O gênero é obrigatório.")
+                        if not st.session_state.escolaridade: erros_c1.append("A escolaridade é obrigatória.")
+                        if not st.session_state.ano_escolar: erros_c1.append("O ano escolar é obrigatório.")
+                        if not certidao_c1 or not termo_guarda_c1: erros_c1.append("Documento(s) ausente(s) ou ilegível(is)")
+                            
+                        if erros_c1:
+                            for e in erros_c1: st.error(f"⚠️ {e}")
+                        else:
+                            with st.spinner("Analisando documentos com a IA... Aguarde"):
+                                dados_cert_c1, err_cert_c1 = analisa_certidao(certidao_c1)
+                                if err_cert_c1:
+                                    st.error(f"⚠️ {err_cert_c1}")
+                                else:
+                                    valido_cert, msg_cert = valida_dados_crianca_certidao(dados_cert_c1, nome_filho_c1, data_nascimento_c1, genero_c1)
+                                    if not valido_cert:
+                                        st.error(f"⚠️ {msg_cert}")
+                                    else:
+                                        dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
+                                        if err_guarda:
+                                            st.error(f"⚠️ {err_guarda}")
+                                        else:
+                                            if not dados_guarda.get("documento_valido") or not dados_guarda.get("legivel"):
+                                                st.error("⚠️ Documento(s) ausente(s) ou ilegível(is)")
+                                            elif not dados_guarda.get("autenticidade_judicial"):
+                                                st.error("⚠️ Documento sem comprovação de autenticidade judicial")
+                                            else:
+                                                nome_crianca_guarda = padroniza_texto(dados_guarda.get("nome_crianca", ""))
+                                                nome_crianca_cert = padroniza_texto(dados_cert_c1.get("nome_crianca", ""))
+                                                
+                                                if nome_crianca_guarda and nome_crianca_guarda not in nome_crianca_cert and nome_crianca_cert not in nome_crianca_guarda:
+                                                    st.error(f"⚠️ O nome da criança/adolescente no Termo de Guarda ({dados_guarda.get('nome_crianca')}) não confere com o da Certidão de Nascimento.")
+                                                else:
+                                                    nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                                    guardiao_doc = padroniza_texto(dados_guarda.get("nome_guardiao", ""))
+                                                    
+                                                    if nome_colab not in guardiao_doc and guardiao_doc not in nome_colab:
+                                                        st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta expressamente como o(a) GUARDIÃO(Ã) nomeado(a) no documento judicial ({dados_guarda.get('nome_guardiao')}).")
+                                                    else:
+                                                        db = SessionLocal()
+                                                        try:
+                                                            novo_dep = Dependente(
+                                                                id_colaborador=st.session_state.colaborador.get("id"),
+                                                                nome_filho=nome_crianca_cert or padroniza_texto(nome_filho_c1),
+                                                                data_nascimento=data_nascimento_c1,
+                                                                genero=genero_c1,
+                                                                escolaridade=st.session_state.escolaridade,
+                                                                ano_escola=st.session_state.ano_escolar,
+                                                                revisao_rh="Sim (Guarda Judicial C1)"
+                                                            )
+                                                            db.add(novo_dep)
+                                                            db.commit()
+                                                            db.refresh(novo_dep)
+                                                            st.success(f"✅ Dependente sob guarda judicial validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                            st.session_state.lista_dependentes.append({
+                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                            })
+                                                            st.session_state.aguardando_decisao = True
+                                                            st.rerun()
+                                                        finally:
+                                                            db.close()
+
+                # ==================== SUB-FLUXO C2: TUTELA JUDICIAL ====================
+                elif "C2" in sub_opcao_c:
+                    with st.form("form_fluxo_c2"):
+                        st.info("📌 Requisitos (C2): Anexe o **Termo de Tutela Judicial** E a **Certidão de Nascimento da Criança**.")
+                        
+                        nome_filho_c2 = st.text_input("Nome Completo da Criança / Adolescente")
+                        genero_c2 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x, key="genero_c2")
+                        
+                        data_maxima_c2 = date.today() - timedelta(days=730)
+                        data_nascimento_c2 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_c2, format="DD/MM/YYYY", key="dt_c2")
+                        
+                        certidao_c2 = st.file_uploader("Anexar Certidão de Nascimento da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_c2")
+                        termo_tutela_c2 = st.file_uploader("Anexar Termo de Tutela Judicial", type=["pdf", "png", "jpg", "jpeg"], key="termo_tutela_c2")
+                        
+                        salvar_c2 = st.form_submit_button("Validar e Adicionar Dependente (C2)")
+
+                    if salvar_c2:
+                        erros_c2 = []
+                        if not nome_filho_c2.strip(): erros_c2.append("O nome da criança é obrigatório.")
+                        if not genero_c2: erros_c2.append("O gênero é obrigatório.")
+                        if not st.session_state.escolaridade: erros_c2.append("A escolaridade é obrigatória.")
+                        if not st.session_state.ano_escolar: erros_c2.append("O ano escolar é obrigatório.")
+                        if not certidao_c2 or not termo_tutela_c2: erros_c2.append("Documento(s) ausente(s) ou ilegível(is)")
+                            
+                        if erros_c2:
+                            for e in erros_c2: st.error(f"⚠️ {e}")
+                        else:
+                            with st.spinner("Analisando documentos com a IA... Aguarde"):
+                                dados_cert_c2, err_cert_c2 = analisa_certidao(certidao_c2)
+                                if err_cert_c2:
+                                    st.error(f"⚠️ {err_cert_c2}")
+                                else:
+                                    valido_cert_c2, msg_cert_c2 = valida_dados_crianca_certidao(dados_cert_c2, nome_filho_c2, data_nascimento_c2, genero_c2)
+                                    if not valido_cert_c2:
+                                        st.error(f"⚠️ {msg_cert_c2}")
+                                    else:
+                                        dados_tutela, err_tutela = analisa_tutela_judicial(termo_tutela_c2)
+                                        if err_tutela:
+                                            st.error(f"⚠️ {err_tutela}")
+                                        else:
+                                            if not dados_tutela.get("documento_valido") or not dados_tutela.get("legivel"):
+                                                st.error("⚠️ Documento(s) ausente(s) ou ilegível(is)")
+                                            elif not dados_tutela.get("autenticidade_judicial"):
+                                                st.error("⚠️ Documento sem comprovação de autenticidade judicial")
+                                            else:
+                                                nome_crianca_tutela = padroniza_texto(dados_tutela.get("nome_crianca", ""))
+                                                nome_crianca_cert_c2 = padroniza_texto(dados_cert_c2.get("nome_crianca", ""))
+                                                
+                                                if nome_crianca_tutela and nome_crianca_tutela not in nome_crianca_cert_c2 and nome_crianca_cert_c2 not in nome_crianca_tutela:
+                                                    st.error(f"⚠️ O nome da criança/adolescente no Termo de Tutela ({dados_tutela.get('nome_crianca')}) não confere com o da Certidão de Nascimento.")
+                                                else:
+                                                    nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                                                    tutor_doc = padroniza_texto(dados_tutela.get("nome_tutor", ""))
+                                                    
+                                                    if nome_colab not in tutor_doc and tutor_doc not in nome_colab:
+                                                        st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta expressamente como o(a) TUTOR(A) nomeado(a) no documento judicial ({dados_tutela.get('nome_tutor')}).")
+                                                    else:
+                                                        db = SessionLocal()
+                                                        try:
+                                                            novo_dep = Dependente(
+                                                                id_colaborador=st.session_state.colaborador.get("id"),
+                                                                nome_filho=nome_crianca_cert_c2 or padroniza_texto(nome_filho_c2),
+                                                                data_nascimento=data_nascimento_c2,
+                                                                genero=genero_c2,
+                                                                escolaridade=st.session_state.escolaridade,
+                                                                ano_escola=st.session_state.ano_escolar,
+                                                                revisao_rh="Sim (Tutela Judicial C2)"
+                                                            )
+                                                            db.add(novo_dep)
+                                                            db.commit()
+                                                            db.refresh(novo_dep)
+                                                            st.success(f"✅ Dependente sob tutela judicial validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                            st.session_state.lista_dependentes.append({
+                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                            })
+                                                            st.session_state.aguardando_decisao = True
+                                                            st.rerun()
+                                                        finally:
+                                                            db.close()
+
+interface()                    
