@@ -629,6 +629,17 @@ def ficha_colaborador():
 
 #---------------------------------------------------FUNCOES DE VALIDACAO input
 
+def verificar_crianca_duplicada(db, nome_filho, data_nascimento):
+    """
+    Verifica se a criança já está cadastrada no banco de dados (por nome padronizado e data de nascimento).
+    Retorna True se já existir, False caso contrário.
+    """
+    nome_padronizado = padroniza_texto(nome_filho).strip()
+    duplicado = db.query(Dependente).filter(
+        Dependente.nome_filho.ilike(f"%{nome_padronizado}%"),
+        Dependente.data_nascimento == data_nascimento
+    ).first()
+    return duplicado is not None
 
 def padroniza_texto(texto):
     # Remove espaços extras, converte para maiúsculo e remove acentos
@@ -1478,25 +1489,29 @@ def interface():
                                                 else:
                                                     db = SessionLocal()
                                                     try:
-                                                        novo_dep = Dependente(
-                                                            id_colaborador=st.session_state.colaborador.get("id"),
-                                                            nome_filho=nome_cert_a2 or nome_form_a2,
-                                                            data_nascimento=data_nascimento_a2,
-                                                            genero=genero_a2,
-                                                            escolaridade=st.session_state.escolaridade,
-                                                            ano_escola=st.session_state.ano_escolar,
-                                                            revisao_rh="Sim (Adoção A2)"
-                                                        )
-                                                        db.add(novo_dep)
-                                                        db.commit()
-                                                        db.refresh(novo_dep)
-                                                        st.success(f"✅ Dependente por adoção validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
-                                                        st.session_state.lista_dependentes.append({
-                                                            "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
-                                                            "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
-                                                        })
-                                                        st.session_state.aguardando_decisao = True
-                                                        st.rerun()
+                                                        nome_final_a2 = nome_cert_a2 or nome_form_a2
+                                                        if verificar_crianca_duplicada(db, nome_final_a2, data_nascimento_a2):
+                                                            st.error("❌ Esta criança já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
+                                                        else:
+                                                            novo_dep = Dependente(
+                                                                id_colaborador=st.session_state.colaborador.get("id"),
+                                                                nome_filho=nome_final_a2,
+                                                                data_nascimento=data_nascimento_a2,
+                                                                genero=genero_a2,
+                                                                escolaridade=st.session_state.escolaridade,
+                                                                ano_escola=st.session_state.ano_escolar,
+                                                                revisao_rh="Sim (Adoção A2)"
+                                                            )
+                                                            db.add(novo_dep)
+                                                            db.commit()
+                                                            db.refresh(novo_dep)
+                                                            st.success(f"✅ Dependente por adoção validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                            st.session_state.lista_dependentes.append({
+                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                            })
+                                                            st.session_state.aguardando_decisao = True
+                                                            st.rerun()
                                                     finally:
                                                         db.close()
 
@@ -1550,25 +1565,29 @@ def interface():
                                                 else:
                                                     db = SessionLocal()
                                                     try:
-                                                        novo_dep = Dependente(
-                                                            id_colaborador=st.session_state.colaborador.get("id"),
-                                                            nome_filho=nome_doc_a3 or nome_form_a3,
-                                                            data_nascimento=data_nascimento_a3,
-                                                            genero="Não informado",
-                                                            escolaridade=st.session_state.escolaridade,
-                                                            ano_escola=st.session_state.ano_escolar,
-                                                            revisao_rh="Sim (Guarda para Adoção A3)"
-                                                        )
-                                                        db.add(novo_dep)
-                                                        db.commit()
-                                                        db.refresh(novo_dep)
-                                                        st.success(f"✅ Dependente sob guarda para adoção cadastrado com sucesso! ID: {novo_dep.id_dependente}")
-                                                        st.session_state.lista_dependentes.append({
-                                                            "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
-                                                            "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
-                                                        })
-                                                        st.session_state.aguardando_decisao = True
-                                                        st.rerun()
+                                                        nome_final_a3 = nome_doc_a3 or nome_form_a3
+                                                        if verificar_crianca_duplicada(db, nome_final_a3, data_nascimento_a3):
+                                                            st.error("❌ Esta criança já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
+                                                        else:
+                                                            novo_dep = Dependente(
+                                                                id_colaborador=st.session_state.colaborador.get("id"),
+                                                                nome_filho=nome_final_a3,
+                                                                data_nascimento=data_nascimento_a3,
+                                                                genero="Não informado",
+                                                                escolaridade=st.session_state.escolaridade,
+                                                                ano_escola=st.session_state.ano_escolar,
+                                                                revisao_rh="Sim (Guarda para Adoção A3)"
+                                                            )
+                                                            db.add(novo_dep)
+                                                            db.commit()
+                                                            db.refresh(novo_dep)
+                                                            st.success(f"✅ Dependente sob guarda para adoção cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                            st.session_state.lista_dependentes.append({
+                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                            })
+                                                            st.session_state.aguardando_decisao = True
+                                                            st.rerun()
                                                     finally:
                                                         db.close()
 
@@ -1669,25 +1688,29 @@ def interface():
                                                 else:
                                                     db = SessionLocal()
                                                     try:
-                                                        novo_dep = Dependente(
-                                                            id_colaborador=st.session_state.colaborador.get("id"),
-                                                            nome_filho=padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b),
-                                                            data_nascimento=data_nascimento_b,
-                                                            genero=genero_b,
-                                                            escolaridade=st.session_state.escolaridade,
-                                                            ano_escola=st.session_state.ano_escolar,
-                                                            revisao_rh="Sim (Enteado - União Estável B1)"
-                                                        )
-                                                        db.add(novo_dep)
-                                                        db.commit()
-                                                        db.refresh(novo_dep)
-                                                        st.success(f"✅ Dependente validado e cadastrado com sucesso via União Estável! ID: {novo_dep.id_dependente}")
-                                                        st.session_state.lista_dependentes.append({
-                                                            "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
-                                                            "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
-                                                        })
-                                                        st.session_state.aguardando_decisao = True
-                                                        st.rerun()
+                                                        nome_final_b1 = padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b)
+                                                        if verificar_crianca_duplicada(db, nome_final_b1, data_nascimento_b):
+                                                            st.error("❌ Esta criança já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
+                                                        else:
+                                                            novo_dep = Dependente(
+                                                                id_colaborador=st.session_state.colaborador.get("id"),
+                                                                nome_filho=nome_final_b1,
+                                                                data_nascimento=data_nascimento_b,
+                                                                genero=genero_b,
+                                                                escolaridade=st.session_state.escolaridade,
+                                                                ano_escola=st.session_state.ano_escolar,
+                                                                revisao_rh="Sim (Enteado - União Estável B1)"
+                                                            )
+                                                            db.add(novo_dep)
+                                                            db.commit()
+                                                            db.refresh(novo_dep)
+                                                            st.success(f"✅ Dependente validado e cadastrado com sucesso via União Estável! ID: {novo_dep.id_dependente}")
+                                                            st.session_state.lista_dependentes.append({
+                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                            })
+                                                            st.session_state.aguardando_decisao = True
+                                                            st.rerun()
                                                     finally:
                                                         db.close()
 
@@ -1747,31 +1770,32 @@ def interface():
                                                 else:
                                                     db = SessionLocal()
                                                     try:
-                                                        novo_dep = Dependente(
-                                                            id_colaborador=st.session_state.colaborador.get("id"),
-                                                            nome_filho=padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b2),
-                                                            data_nascimento=data_nascimento_b2,
-                                                            genero=genero_b2,
-                                                            escolaridade=st.session_state.escolaridade,
-                                                            ano_escola=st.session_state.ano_escolar,
-                                                            revisao_rh="Sim (Enteado - Casamento B2)"
-                                                        )
-                                                        db.add(novo_dep)
-                                                        db.commit()
-                                                        db.refresh(novo_dep)
-                                                        st.success(f"✅ Dependente validado e cadastrado com sucesso via Certidão de Casamento! ID: {novo_dep.id_dependente}")
-                                                        st.session_state.lista_dependentes.append({
-                                                            "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
-                                                            "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
-                                                        })
-                                                        st.session_state.aguardando_decisao = True
-                                                        st.rerun()
+                                                        nome_final_b2 = padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b2)
+                                                        if verificar_crianca_duplicada(db, nome_final_b2, data_nascimento_b2):
+                                                            st.error("❌ Esta criança já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
+                                                        else:
+                                                            novo_dep = Dependente(
+                                                                id_colaborador=st.session_state.colaborador.get("id"),
+                                                                nome_filho=nome_final_b2,
+                                                                data_nascimento=data_nascimento_b2,
+                                                                genero=genero_b2,
+                                                                escolaridade=st.session_state.escolaridade,
+                                                                ano_escola=st.session_state.ano_escolar,
+                                                                revisao_rh="Sim (Enteado - Casamento B2)"
+                                                            )
+                                                            db.add(novo_dep)
+                                                            db.commit()
+                                                            db.refresh(novo_dep)
+                                                            st.success(f"✅ Dependente validado e cadastrado com sucesso via Certidão de Casamento! ID: {novo_dep.id_dependente}")
+                                                            st.session_state.lista_dependentes.append({
+                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                            })
+                                                            st.session_state.aguardando_decisao = True
+                                                            st.rerun()
                                                     finally:
                                                         db.close()
 
-        # =========================================================================
-        # CAMINHO C: CRIANÇA OU ADOLESCENTE SOB GUARDA OU TUTELA
-        # =========================================================================
         # =========================================================================
         # CAMINHO C: CRIANÇA OU ADOLESCENTE SOB GUARDA OU TUTELA (C1 e C2)
         # =========================================================================
@@ -1874,25 +1898,29 @@ def interface():
                                                     else:
                                                         db = SessionLocal()
                                                         try:
-                                                            novo_dep = Dependente(
-                                                                id_colaborador=st.session_state.colaborador.get("id"),
-                                                                nome_filho=nome_crianca_cert or padroniza_texto(nome_filho_c1),
-                                                                data_nascimento=data_nascimento_c1,
-                                                                genero=genero_c1,
-                                                                escolaridade=st.session_state.escolaridade,
-                                                                ano_escola=st.session_state.ano_escolar,
-                                                                revisao_rh="Sim (Guarda Judicial C1)"
-                                                            )
-                                                            db.add(novo_dep)
-                                                            db.commit()
-                                                            db.refresh(novo_dep)
-                                                            st.success(f"✅ Dependente sob guarda judicial validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
-                                                            st.session_state.lista_dependentes.append({
-                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
-                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
-                                                            })
-                                                            st.session_state.aguardando_decisao = True
-                                                            st.rerun()
+                                                            nome_final_c1 = nome_crianca_cert or padroniza_texto(nome_filho_c1)
+                                                            if verificar_crianca_duplicada(db, nome_final_c1, data_nascimento_c1):
+                                                                st.error("❌ Esta criança já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
+                                                            else:
+                                                                novo_dep = Dependente(
+                                                                    id_colaborador=st.session_state.colaborador.get("id"),
+                                                                    nome_filho=nome_final_c1,
+                                                                    data_nascimento=data_nascimento_c1,
+                                                                    genero=genero_c1,
+                                                                    escolaridade=st.session_state.escolaridade,
+                                                                    ano_escola=st.session_state.ano_escolar,
+                                                                    revisao_rh="Sim (Guarda Judicial C1)"
+                                                                )
+                                                                db.add(novo_dep)
+                                                                db.commit()
+                                                                db.refresh(novo_dep)
+                                                                st.success(f"✅ Dependente sob guarda judicial validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                                st.session_state.lista_dependentes.append({
+                                                                    "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                    "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                                })
+                                                                st.session_state.aguardando_decisao = True
+                                                                st.rerun()
                                                         finally:
                                                             db.close()
 
@@ -1955,25 +1983,29 @@ def interface():
                                                     else:
                                                         db = SessionLocal()
                                                         try:
-                                                            novo_dep = Dependente(
-                                                                id_colaborador=st.session_state.colaborador.get("id"),
-                                                                nome_filho=nome_crianca_cert_c2 or padroniza_texto(nome_filho_c2),
-                                                                data_nascimento=data_nascimento_c2,
-                                                                genero=genero_c2,
-                                                                escolaridade=st.session_state.escolaridade,
-                                                                ano_escola=st.session_state.ano_escolar,
-                                                                revisao_rh="Sim (Tutela Judicial C2)"
-                                                            )
-                                                            db.add(novo_dep)
-                                                            db.commit()
-                                                            db.refresh(novo_dep)
-                                                            st.success(f"✅ Dependente sob tutela judicial validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
-                                                            st.session_state.lista_dependentes.append({
-                                                                "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
-                                                                "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
-                                                            })
-                                                            st.session_state.aguardando_decisao = True
-                                                            st.rerun()
+                                                            nome_final_c2 = nome_crianca_cert_c2 or padroniza_texto(nome_filho_c2)
+                                                            if verificar_crianca_duplicada(db, nome_final_c2, data_nascimento_c2):
+                                                                st.error("❌ Esta criança já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
+                                                            else:
+                                                                novo_dep = Dependente(
+                                                                    id_colaborador=st.session_state.colaborador.get("id"),
+                                                                    nome_filho=nome_final_c2,
+                                                                    data_nascimento=data_nascimento_c2,
+                                                                    genero=genero_c2,
+                                                                    escolaridade=st.session_state.escolaridade,
+                                                                    ano_escola=st.session_state.ano_escolar,
+                                                                    revisao_rh="Sim (Tutela Judicial C2)"
+                                                                )
+                                                                db.add(novo_dep)
+                                                                db.commit()
+                                                                db.refresh(novo_dep)
+                                                                st.success(f"✅ Dependente sob tutela judicial validado e cadastrado com sucesso! ID: {novo_dep.id_dependente}")
+                                                                st.session_state.lista_dependentes.append({
+                                                                    "ID_Dependente": novo_dep.id_dependente, "Nome_filho": novo_dep.nome_filho, "Gênero": novo_dep.genero,
+                                                                    "Data_nascimento": novo_dep.data_nascimento.strftime("%d/%m/%Y"), "Escolaridade": novo_dep.escolaridade, "Ano_escolar": novo_dep.ano_escola
+                                                                })
+                                                                st.session_state.aguardando_decisao = True
+                                                                st.rerun()
                                                         finally:
                                                             db.close()
 
