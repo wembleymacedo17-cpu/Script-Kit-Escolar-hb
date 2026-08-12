@@ -251,6 +251,7 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
     print("Buscando colaborador no banco...")
     
     with st.form("form_busca"):
+
         cracha_digitado = st.text_input("Crachá:", placeholder="Digite o número e aperte Enter")
         buscar = st.form_submit_button("🔍 Buscar")
         
@@ -272,6 +273,7 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             nome,
             descricao_situacao,
             titulo_reduzido_cargo,
+            id_cargo,
             data_demissao
         FROM colaboradores
         WHERE cracha = {cracha_numero}
@@ -295,7 +297,9 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             "Crachá": colaborador["cracha"],
             "Nome": colaborador["nome"],
             "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
-            "Descrição (Situação)": colaborador["descricao_situacao"]
+            "Descrição (Situação)": colaborador["descricao_situacao"],
+            # AQUI ESTÁ A CORREÇÃO: Garante que o id_cargo seja salvo como um número inteiro
+            "id_cargo": int(colaborador["id_cargo"]) if colaborador.get("id_cargo") else None
         }
         
         st.divider()
@@ -308,6 +312,7 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
         
     finally:
         supabase_connector.fechar_conexao()
+
 
 def adiciona_dados_contato():
     print("Adicionando dados de contato...")
@@ -1251,11 +1256,11 @@ def interface():
                 st.rerun()  
     
     else:
-        # ===================== FASE 2: TRIAGEM DE VÍNCULO (A, B, C) =====================
+        # ===================== FASE 2: TRIAGEM DE VÍNCULO =====================
         st.success(f"👤 Colaborador: {st.session_state.colaborador['Nome']} | ✅ Contato salvo.")
         
         # -------------------------------------------------------------------------
-        # TELAS DE CONTROLE UNIVERSAL (Oculta os formulários após salvar dependente)
+        # TELAS DE CONTROLE UNIVERSAL
         # -------------------------------------------------------------------------
         if st.session_state.cadastro_finalizado:
             st.divider()
@@ -1276,26 +1281,26 @@ def interface():
 
         if st.session_state.aguardando_decisao:
             st.divider()
-            st.subheader("✅ Dependente adicionado ao carrinho com sucesso!")
+            st.subheader("✅ Item adicionado ao carrinho com sucesso!")
             st.write("Confira os itens no seu **Carrinho (na barra lateral à esquerda)** ou escolha abaixo o que deseja fazer:")
             
             col1, col2 = st.columns([1, 1])
             with col1:
-                if st.button("➕ Adicionar outro dependente", type="primary"):
+                # Modifiquei o texto do botão para abranger tanto dependente quanto o próprio estagiário
+                if st.button("➕ Adicionar outro dependente/kit", type="primary"):
                     st.session_state.aguardando_decisao = False
                     st.session_state.escolaridade = ""
                     st.session_state.ano_escolar = ""
                     st.session_state.aguardando_doc_complementar = False
                     st.session_state.dados_certidao_filho = None
                     st.session_state.dependente_temp = None
-                    st.session_state.tipo_fluxo = None # Reseta para a tela inicial de opções
+                    st.session_state.tipo_fluxo = None # Reseta para a tela inicial
                     if 'sub_opcao_a' in st.session_state: del st.session_state['sub_opcao_a']
                     if 'sub_opcao_b' in st.session_state: del st.session_state['sub_opcao_b']
                     if 'sub_opcao_c' in st.session_state: del st.session_state['sub_opcao_c']
                     st.rerun()
             with col2:
-                if st.button("🚀 Finalizar cadastro e escolher kits"):
-                    # GRAVAÇÃO OFICIAL NO BANCO DE DADOS EM LOTE
+                if st.button("🚀 Finalizar carrinho e escolher kits"):
                     db = SessionLocal()
                     try:
                         for dep in st.session_state.lista_dependentes:
@@ -1322,11 +1327,101 @@ def interface():
             return
 
         # -------------------------------------------------------------------------
-        # SELEÇÃO DO FLUXO PRINCIPAL
+        # SELEÇÃO DO FLUXO PRINCIPAL COM NOVA REGRA DE NEGÓCIO (ESTAGIÁRIO)
         # -------------------------------------------------------------------------
         if st.session_state.tipo_fluxo is None:
-            avalia_caso_colaborador()
-            return
+            # Lista de cargos que classificam como estagiário
+            cargos_estagiario = [600, 601, 602, 5001]
+            id_cargo_colab = st.session_state.colaborador.get('id_cargo')
+            
+            # Converte para int caso tenha vindo como string do banco
+            if id_cargo_colab is not None and int(id_cargo_colab) in cargos_estagiario:
+                st.session_state.tipo_fluxo = "ESTAGIARIO"
+                st.rerun()
+            else:
+                # Se não for estagiário, exibe os caminhos A, B e C normalmente
+                avalia_caso_colaborador()
+                return
+
+        # =========================================================================
+        # CAMINHO EXCLUSIVO: ESTAGIÁRIO (KIT PRÓPRIO)
+        # =========================================================================
+        elif st.session_state.tipo_fluxo == "ESTAGIARIO":
+            st.subheader("🎓 Cadastro de Estagiário (Kit Próprio)")
+            st.info("Como estagiário, você tem direito ao seu próprio kit escolar. Preencha seus dados acadêmicos e anexe a sua **Certidão de Nascimento** para validação automática.")
+
+            if 'escolaridade' not in st.session_state: st.session_state.escolaridade = ""
+            if 'ano_escolar' not in st.session_state: st.session_state.ano_escolar = ""
+
+            # Permite apenas as opções que fazem sentido para a idade de estagiário (Médio pra cima)
+            st.selectbox("Sua Escolaridade", ["", "Ensino Médio", "Ensino Superior / Técnico"], format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x, key="escolaridade")
+            
+            opcoes_ano = {
+                "": [],
+                "Ensino Médio": ["", "1º Ano", "2º Ano", "3º Ano"],
+                "Ensino Superior / Técnico": ["", "1º Semestre", "2º Semestre", "3º Semestre", "4º Semestre", "5º Semestre", "6º Semestre", "7º Semestre", "8º Semestre", "9º Semestre", "10º Semestre"]
+            }
+            
+            if st.session_state.escolaridade:
+                st.selectbox("Ano/Semestre em 2026", opcoes_ano[st.session_state.escolaridade], format_func=lambda x: "Selecione o Ano/Semestre..." if x == "" else x, key="ano_escolar")
+
+            with st.form("form_estagiario"):
+                genero_est = st.selectbox("Seu Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
+                
+                # Range de datas maior (Estagiários são adultos/jovens)
+                data_nascimento_est = st.date_input("Sua Data de Nascimento", min_value=date(1950, 1, 1), max_value=date.today(), format="DD/MM/YYYY")
+                
+                certidao_est = st.file_uploader("Anexe SUA Certidão de Nascimento", type=["pdf", "png", "jpg", "jpeg"])
+                
+                salvar_est = st.form_submit_button("Validar e Adicionar ao Carrinho")
+
+            if salvar_est:
+                erros_est = []
+                if not genero_est: erros_est.append("O gênero é obrigatório.")
+                if not st.session_state.escolaridade: erros_est.append("A escolaridade é obrigatória.")
+                if not st.session_state.ano_escolar: erros_est.append("O ano escolar é obrigatório.")
+                if not certidao_est: erros_est.append("A certidão de nascimento é obrigatória.")
+
+                if erros_est:
+                    for e in erros_est: st.error(f"⚠️ {e}")
+                else:
+                    with st.spinner("Analisando certidão via IA... Aguarde"):
+                        dados_cert, err_cert = analisa_certidao(certidao_est)
+                        
+                        if err_cert:
+                            st.error(f"⚠️ {err_cert}")
+                        elif not dados_cert.get("legivel", True) or not dados_cert.get("documento_valido", True):
+                            st.error("❌ Documento ilegível ou não é uma certidão válida, mande outro arquivo.")
+                        else:
+                            # 1. Comparação rigorosa: Nome do Colaborador (Banco) vs Nome da Criança (na Certidão lida pela IA)
+                            nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
+                            nome_cert = padroniza_texto(dados_cert.get("nome_crianca", ""))
+                            
+                            if nome_colab != nome_cert:
+                                st.error(f"⚠️ Vínculo negado: O nome lido na certidão ({dados_cert.get('nome_crianca', 'N/A')}) não corresponde ao seu nome cadastrado ({st.session_state.colaborador['Nome']}).")
+                            else:
+                                db = SessionLocal()
+                                try:
+                                    # Usa o mesmo verificador de duplicidade para garantir que o estagiário não peça o próprio kit 2x
+                                    if verificar_crianca_duplicada(db, nome_colab, data_nascimento_est):
+                                        st.error("❌ Você já adicionou o seu kit ao carrinho ou já finalizou este cadastro.")
+                                    else:
+                                        # Cadastra o próprio Estagiário como "Filho" na listagem
+                                        st.session_state.lista_dependentes.append({
+                                            "ID_Dependente": None,
+                                            "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                                            "Nome_filho": nome_colab, 
+                                            "Gênero": genero_est,
+                                            "Data_nascimento": data_nascimento_est.strftime("%d/%m/%Y"),
+                                            "Escolaridade": st.session_state.escolaridade,
+                                            "Ano_escolar": st.session_state.ano_escolar,
+                                            "revisao_rh": "Não (Estagiário Validado)"
+                                        })
+                                        st.success("✅ Certidão validada! Seu Kit de Estagiário foi adicionado ao carrinho.")
+                                        st.session_state.aguardando_decisao = True
+                                        st.rerun()
+                                finally:
+                                    db.close()
 
         # =========================================================================
         # CAMINHO A: FILHO(A) BIOLÓGICO(A) OU ADOTIVO(A)

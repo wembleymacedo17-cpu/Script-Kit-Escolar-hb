@@ -6,6 +6,7 @@ SELECT
     a.numcad AS cracha,
     a.nomfun AS nome,
     b.dessit AS descricao_situacao,
+    car.codcar AS id_cargo,
     car.titcar AS titulo_reduzido_cargo,
     a.datafa AS data_demissao
 
