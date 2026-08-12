@@ -314,7 +314,6 @@ def adiciona_dados_contato():
     with st.form("form_contato"):
         st.subheader("📞 Dados de Contato")
         
-        # Sem colunas, sem seletores de domínio. Apenas dois campos simples.
         email = st.text_input("E-mail", placeholder="exemplo@gmail.com")
         confirmacao_email = st.text_input("Confirme o E-mail", placeholder="exemplo@gmail.com")
             
@@ -326,21 +325,14 @@ def adiciona_dados_contato():
         
     erros = []
     
-    # -------------------------------------------
-    # NOVA REGRA: COMPARAÇÃO SIMPLES E DIRETA
-    # -------------------------------------------
     email_digitado = email.strip()
     email_confirmado = confirmacao_email.strip()
     
     if not email_digitado or not email_confirmado:
         erros.append("⚠️ O preenchimento e a confirmação do e-mail são obrigatórios.")
     elif email_digitado.lower() != email_confirmado.lower():
-        # Se os e-mails não forem idênticos, exibe o erro
         erros.append("⚠️ Os e-mails não batem. Por favor, digite novamente.")
         
-    # -------------------------------------------
-    # VALIDAÇÕES DO CAMPO DE TELEFONE (Mantido como estava)
-    # -------------------------------------------
     if not telefone.strip():
         erros.append("⚠️ Telefone é obrigatório.")
     else:
@@ -348,7 +340,6 @@ def adiciona_dados_contato():
         if not telefone_valido:
             erros.append(f"⚠️ {mensagem_telefone}")
             
-    # Exibe os erros se houver, travando o envio
     if erros:
         for x in erros:
             st.error(f"{x}")
@@ -365,14 +356,6 @@ def adiciona_dados_contato():
 def adicionar_dependentes():
     st.subheader("👶 Adicionar Dependente")
     st.write(f"Nome Responsável: {st.session_state.colaborador['Nome']}")
-
-    # --- Inicializa estados de controle do fluxo (mantido igual) ---
-    if 'aguardando_doc_complementar' not in st.session_state:
-        st.session_state.aguardando_doc_complementar = False
-    if 'dados_certidao_filho' not in st.session_state:
-        st.session_state.dados_certidao_filho = None
-    if 'dependente_temp' not in st.session_state:
-        st.session_state.dependente_temp = None
 
     if 'escolaridade' not in st.session_state:
         st.session_state.escolaridade = ""
@@ -404,98 +387,7 @@ def adicionar_dependentes():
         )
 
     # =========================================================
-    # FASE 2 — Documento complementar
-    # =========================================================
-    if st.session_state.aguardando_doc_complementar:
-        st.warning(
-            "⚠️ Seu nome atual não foi encontrado na certidão. "
-            "Isso pode ocorrer por mudança de nome (casamento/divórcio)."
-        )
-        st.divider()
-
-        doc_complementar = st.file_uploader(
-            "📄 Anexe sua Certidão de Casamento ou Divórcio para confirmar seu vínculo",
-            type=["pdf", "png", "jpg", "jpeg"],
-            key="doc_complementar"
-        )
-
-        col1, col2 = st.columns([1, 1])
-
-        with col1:
-            confirmar = st.button("✅ Confirmar com documento complementar", type="primary")
-        with col2:
-            cancelar = st.button("↩️ Cancelar e tentar outra certidão")
-
-        if cancelar:
-            st.session_state.aguardando_doc_complementar = False
-            st.session_state.dados_certidao_filho = None
-            st.session_state.dependente_temp = None
-            st.rerun()
-
-        if confirmar:
-            if not doc_complementar:
-                st.error("❌ Anexe o documento complementar antes de confirmar.")
-                return None
-
-            dados_complementar, erro = analisa_certidao_complementar(doc_complementar)
-
-            if erro:
-                st.error(erro)
-                return None
-
-            nome_na_certidao_filho = (
-                st.session_state.dados_certidao_filho.get("nome_mae") or
-                st.session_state.dados_certidao_filho.get("nome_pai") or ""
-            )
-
-            ok, mensagem, revisao_rh = valida_com_doc_complementar(
-                dados_complementar, 
-                st.session_state.colaborador['Nome'], 
-                nome_na_certidao_filho
-            )
-
-            if ok:
-                st.success(mensagem)
-                if revisao_rh:
-                    st.info("ℹ️ Este cadastro será encaminhado para revisão do RH.")
-
-                # ==================== MUDANÇA: SALVAR NO BANCO ====================
-                resultado = st.session_state.dependente_temp
-                resultado["revisao_rh"] = revisao_rh
-                resultado["Data_Cadastro"] = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-                db = SessionLocal()          # Abre conexão com o banco
-                try:
-                    novo_dependente = Dependente(
-                        id_colaborador=st.session_state.colaborador.get("id"),   # ID real do colaborador no banco
-                        nome_filho=resultado["Nome_filho"],
-                        data_nascimento=datetime.strptime(resultado["Data_nascimento"], "%d/%m/%Y").date(),
-                        genero=resultado.get("Gênero"),
-                        escolaridade=resultado["Escolaridade"],
-                        ano_escola=resultado["Ano_escolar"],
-                        revisao_rh="Sim" if resultado["revisao_rh"] else None
-                    )
-                    db.add(novo_dependente)
-                    db.commit()
-                    db.refresh(novo_dependente)
-
-                    st.success(f"✅ Dependente cadastrado com sucesso! ID: {novo_dependente.id_dependente}")
-                finally:
-                    db.close()               # Sempre fecha a conexão
-
-                # Limpa os estados
-                st.session_state.aguardando_doc_complementar = False
-                st.session_state.dados_certidao_filho = None
-                st.session_state.dependente_temp = None
-                return resultado
-            else:
-                st.error(mensagem)
-                return None
-
-        return None
-
-    # =========================================================
-    # FASE 1 — Formulário principal
+    # FORMULÁRIO PRINCIPAL DE ADIÇÃO (DIRETO AO CARRINHO)
     # =========================================================
     with st.form("form_dependente"):
         nome_filho    = st.text_input("Nome Completo da Criança")
@@ -509,12 +401,11 @@ def adicionar_dependentes():
             type=["pdf", "png", "jpg", "jpeg"],
             help="Pode enviar foto, imagem escaneada ou PDF"
         )
-        salvar = st.form_submit_button("📁 Adicionar Dependente")
+        salvar = st.form_submit_button("📁 Adicionar ao Carrinho")
 
     if not salvar:
         return None
 
-    # Validações dos campos (mantidas iguais)
     erros = []
     if not nome_filho.strip():
         erros.append("❌ Nome da criança é obrigatório.")
@@ -537,13 +428,18 @@ def adicionar_dependentes():
             st.error(x)
         return None
 
-    # ===================== CHECAGEM DE DUPLICIDADE NO BANCO =====================
+    # ===================== CHECAGEM DE DUPLICIDADE (Carrinho + Banco) =====================
     nome_padronizado = padroniza_texto(nome_filho).strip()
-    data_nascimento.strftime("%d/%m/%Y")
 
     db = SessionLocal()
     try:
-        # Substitui a busca no DataFrame por busca no banco
+        # 1. Verifica se já está no carrinho atual da sessão
+        for dep in st.session_state.get("lista_dependentes", []):
+            if padroniza_texto(dep["Nome_filho"]) == nome_padronizado and dep["Data_nascimento"] == data_nascimento.strftime("%d/%m/%Y"):
+                st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
+                return None
+
+        # 2. Verifica no banco de dados oficial
         duplicado = db.query(Dependente).filter(
             Dependente.nome_filho.ilike(f"%{nome_padronizado}%"),
             Dependente.data_nascimento == data_nascimento
@@ -553,7 +449,7 @@ def adicionar_dependentes():
             st.error("❌ Esta criança já possui um kit cadastrado.")
             return None
 
-        # Análise da certidão com Gemini (mantida igual)
+        # Análise da certidão com Gemini
         with st.spinner("🔍 Analisando certidão de nascimento, aguarde..."):
             dados_certidao, erro_api = analisa_certidao(certidao)
        
@@ -561,7 +457,12 @@ def adicionar_dependentes():
             st.error(erro_api)
             return None
 
-        # Validações (mantidas)
+        # TRATAMENTO PARA DOCUMENTO ILEGÍVEL OU INVÁLIDO
+        if not dados_certidao.get("legivel", True) or not dados_certidao.get("documento_valido", True):
+            st.error("❌ Documento ilegível, mande outro arquivo")
+            return None
+
+        # Validações dos dados da criança na certidão
         dados_ok, msg_dados = valida_dados_crianca_certidao(dados_certidao, nome_filho, data_nascimento, genero)
         if not dados_ok:
             st.error(msg_dados)
@@ -573,52 +474,25 @@ def adicionar_dependentes():
 
         if valido:
             st.success(mensagem)
-
-            # ==================== SALVAMENTO NO BANCO ====================
-            novo_dependente_db = Dependente(
-                id_colaborador = st.session_state.colaborador.get("id"),   # ID do colaborador no banco
-                nome_filho = padroniza_texto(dados_certidao.get("nome_crianca") or nome_filho),
-                data_nascimento = data_nascimento,
-                genero = genero,
-                escolaridade = st.session_state.escolaridade,
-                ano_escola = st.session_state.ano_escolar
-            )
-
-            db.add(novo_dependente_db)
-            db.commit()
-            db.refresh(novo_dependente_db)
-
-            # Retorna dicionário compatível com o resto do seu código
-            return {
-                "ID_Dependente": novo_dependente_db.id_dependente,
-                "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                "Nome_filho": novo_dependente_db.nome_filho,
-                "Gênero": novo_dependente_db.genero,
-                "Data_nascimento": novo_dependente_db.data_nascimento.strftime("%d/%m/%Y"),
-                "Escolaridade": novo_dependente_db.escolaridade,
-                "Ano_escolar": novo_dependente_db.ano_escola,
-                "Data_Cadastro": datetime.now().strftime("%d/%m/%Y %H:%M"),
-                "revisao_rh": False
-            }
-
         else:
-            # Fase 2 - documento complementar
-            st.session_state.aguardando_doc_complementar = True
-            st.session_state.dados_certidao_filho = dados_certidao
-            st.session_state.dependente_temp = {
-                "ID_Dependente": None,   # será gerado pelo banco
-                "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                "Nome_filho": padroniza_texto(dados_certidao.get("nome_crianca") or ""),
-                "Gênero": genero,
-                "Data_nascimento": data_nascimento.strftime("%d/%m/%Y"),
-                "Escolaridade": st.session_state.escolaridade,
-                "Ano_escolar": st.session_state.ano_escolar,
-            }
-            st.rerun()
+            st.info("ℹ️ Vínculo requer conferência, mas o item foi adicionado ao carrinho para validação posterior.")
+
+        # Retorna o dicionário para ser inserido puramente no carrinho (Session State)
+        nome_final = padroniza_texto(dados_certidao.get("nome_crianca") or nome_filho)
+        return {
+            "ID_Dependente": None, # Será gerado ao finalizar o carrinho no banco
+            "ID_Colaborador": st.session_state.colaborador['Crachá'],
+            "Nome_filho": nome_final,
+            "Gênero": genero,
+            "Data_nascimento": data_nascimento.strftime("%d/%m/%Y"),
+            "Escolaridade": st.session_state.escolaridade,
+            "Ano_escolar": st.session_state.ano_escolar,
+            "Data_Cadastro": datetime.now().strftime("%d/%m/%Y %H:%M"),
+            "revisao_rh": "Sim" if not valido else False
+        }
 
     finally:
         db.close()
-
 
 
 def ficha_colaborador():
@@ -630,23 +504,45 @@ def ficha_colaborador():
 #---------------------------------------------------FUNCOES DE VALIDACAO input
 
 def verificar_crianca_duplicada(db, nome_filho, data_nascimento):
-    nome_padronizado = padroniza_texto(nome_filho).strip()
-    data_str = data_nascimento.strftime("%d/%m/%Y")
+    if not nome_filho:
+        return False
+        
+    # Padroniza e limpa o nome (tudo minúsculo, sem espaços extras)
+    nome_padronizado = padroniza_texto(nome_filho).lower().strip()
     
-    # 1. TRAVA DO CARRINHO: Verifica se já foi adicionado nesta sessão (qualquer fluxo A, B ou C)
+    # Padroniza a data de nascimento para string DD/MM/YYYY independentemente do formato recebido
+    if hasattr(data_nascimento, "strftime"):
+        data_str = data_nascimento.strftime("%d/%m/%Y")
+    else:
+        data_str = str(data_nascimento).strip()
+    
+    # 1. VERIFICAÇÃO RIGOROSA NO CARRINHO (Session State)
     for dep in st.session_state.get("lista_dependentes", []):
-        dep_nome = padroniza_texto(dep["Nome_filho"]).strip()
-        dep_data = dep["Data_nascimento"]
+        dep_nome = padroniza_texto(dep.get("Nome_filho", "")).lower().strip()
+        dep_data = str(dep.get("Data_nascimento", "")).strip()
+        
+        # Se o nome bater E a data de nascimento for igual, bloqueia!
         if dep_nome == nome_padronizado and dep_data == data_str:
             return True
             
-    # 2. TRAVA DO BANCO DE DADOS: Verifica se já existe um cadastro finalizado anteriormente
-    duplicado = db.query(Dependente).filter(
-        Dependente.nome_filho.ilike(f"%{nome_padronizado}%"),
-        Dependente.data_nascimento == data_nascimento
-    ).first()
-    
-    return duplicado is not None
+    # 2. VERIFICAÇÃO NO BANCO DE DADOS OFICIAL
+    if hasattr(data_nascimento, "strftime"):
+        data_obj_db = data_nascimento
+    else:
+        try:
+            data_obj_db = datetime.strptime(data_str, "%d/%m/%Y").date()
+        except:
+            data_obj_db = None
+
+    if data_obj_db:
+        duplicado = db.query(Dependente).filter(
+            Dependente.nome_filho.ilike(f"%{nome_padronizado}%"),
+            Dependente.data_nascimento == data_obj_db
+        ).first()
+        if duplicado:
+            return True
+            
+    return False
 def padroniza_texto(texto):
     # Remove espaços extras, converte para maiúsculo e remove acentos
     texto = texto.strip().upper()
