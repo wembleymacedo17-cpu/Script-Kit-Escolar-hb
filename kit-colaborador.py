@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from io import BytesIO
 import uuid
 from datetime import datetime
-
+import time 
 # ==================== IMPORTS DO BANCO ====================
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
 from conector_oracle import OracleConnector
@@ -238,6 +238,253 @@ generation_config_tutela_judicial = types.GenerateContentConfig(
         "required": ["documento_valido", "legivel", "autenticidade_judicial", "nome_crianca", "nome_tutor"]
     }
 )
+
+######################################################################## TRATAMENTO DE ERRO AI STUDIO 
+#---------------------------------------------------FUNCOES DE validcao de documento
+
+def tratar_erro_gemini(e, tentativa, tentativas):
+    """Função auxiliar interna para tratar o backoff e mensagens de erro do Gemini"""
+    erro_str = str(e).lower()
+    print(f"🔍 ERRO CAPTURADO NA API: {repr(e)}")
+    
+    # Identifica se é o erro 503, indisponibilidade ou timeout
+    if "503" in erro_str or "unavailable" in erro_str or "high demand" in erro_str or "timeout" in erro_str or "429" in erro_str:
+        if tentativa < tentativas:
+            time.sleep(tentativa * 2) # Espera progressiva: 2s, 4s, 6s...
+            return True, None # True = Deve tentar novamente
+        else:
+            return False, "⚠️ O sistema de inteligência artificial está processando muitas requisições neste momento. Por favor, clique em 'Validar' novamente em alguns segundos."
+            
+    # Se for um erro diferente que esgotou as tentativas
+    if tentativa == tentativas:
+        return False, "❌ Serviço de validação indisponível no momento. Verifique o documento e tente novamente."
+        
+    return False, "❌ Ocorreu um erro inesperado na leitura do documento."
+
+
+def analisa_guarda_judicial(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "Documento(s) ausente(s) ou ilegível(is)"
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise este termo ou certidão de guarda judicial e extraia os dados conforme as regras."
+                ],
+                config=generation_config_guarda_judicial,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception as e:
+            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
+            if tentar_novo:
+                continue
+            return None, msg_erro
+            
+    return None, "Documento(s) ausente(s) ou ilegível(is)"
+
+
+def analisa_tutela_judicial(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "Documento(s) ausente(s) ou ilegível(is)"
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise este termo de tutela judicial e extraia os dados conforme as regras."
+                ],
+                config=generation_config_tutela_judicial,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception as e:
+            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
+            if tentar_novo:
+                continue
+            return None, msg_erro
+            
+    return None, "Documento(s) ausente(s) ou ilegível(is)"
+
+
+def analisa_certidao_averbacao(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "⚠️ Erro ao ler o arquivo. Tente novamente."
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise esta certidão de nascimento com averbação de adoção e extraia os dados conforme as regras."
+                ],
+                config=generation_config_adocao_averbacao,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception as e:
+            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
+            if tentar_novo:
+                continue
+            return None, msg_erro
+            
+    return None, "Não foi possível validar o documento."
+
+
+def analisa_guarda_adocao(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "⚠️ Erro ao ler o arquivo. Tente novamente."
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise este documento judicial de guarda para fins de adoção e extraia os dados conforme as regras."
+                ],
+                config=generation_config_guarda_adocao,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception as e:
+            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
+            if tentar_novo:
+                continue
+            return None, msg_erro
+            
+    return None, "Não foi possível validar o documento judicial."
+
+
+def analisa_uniao_estavel(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "⚠️ Erro ao ler o arquivo de união estável. Tente novamente."
+    
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise esta declaração de união estável e extraia os dados conforme as regras."
+                ],
+                config=generation_config_uniao_estavel,
+            )
+            return json.loads(response.text.strip()), None
+        except Exception as e:
+            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
+            if tentar_novo:
+                continue
+            return None, msg_erro
+            
+    return None, "⚠️ Não foi possível validar o documento."
+
+
+def analisa_certidao(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "❌ Erro ao ler o arquivo. Tente fazer o upload novamente."
+
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise o documento e retorne os dados no formato estruturado."
+                ],
+                config=generation_config_certidao,
+            )
+            texto_limpo = response.text.strip()
+            return json.loads(texto_limpo), None
+
+        except json.JSONDecodeError:
+            return None, "❌ Resposta da IA em formato inesperado. Tente novamente."
+        except Exception as e:
+            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
+            if tentar_novo:
+                continue
+            return None, msg_erro
+
+    return None, "❌ Não foi possível validar após várias tentativas."
+
+
+def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
+    nome_pai = dados_certidao.get("nome_pai") or ""
+    nome_mae = dados_certidao.get("nome_mae") or ""
+
+    if not nome_pai and not nome_mae:
+        return False, "❌ Não foi possível identificar os nomes dos pais na certidão."
+
+    nome_db   = padroniza_texto(nome_colaborador)
+    pai_cert  = padroniza_texto(nome_pai)
+    mae_cert  = padroniza_texto(nome_mae)
+
+    if nome_db == pai_cert:
+        return True, f"✅ Nome confere com o pai: {nome_pai}"
+    if nome_db == mae_cert:
+        return True, f"✅ Nome confere com a mãe: {nome_mae}"
+
+    return False, None
+
+
+def analisa_certidao_complementar(arquivo, tentativas=3):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+    except Exception:
+        return None, "❌ Erro ao ler o arquivo. Tente fazer o upload novamente."
+
+    mime_type = arquivo.type
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = client_gemini.models.generate_content(
+                model='gemini-3.1-flash-lite',
+                contents=[
+                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+                    "Analise o documento e retorne os dados no formato estruturado."
+                ],
+                config=generation_config_doc_complementar,
+            )
+            texto_limpo = response.text.strip()
+            return json.loads(texto_limpo), None
+
+        except json.JSONDecodeError:
+            return None, "❌ Resposta da IA em formato inesperado. Tente novamente."
+        except Exception as e:
+            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
+            if tentar_novo:
+                continue
+            return None, msg_erro
+
+    return None, "❌ Não foi possível validar após várias tentativas."
+
+
 
 
 
@@ -602,17 +849,17 @@ def avalia_caso_colaborador():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("A) Filho(a) biológico(a) ou adotivo(a)", use_container_width=True):
+        if st.button("A) Filho(a) biológico(a) ou adotivo(a)", width='stretch'):
             st.session_state.tipo_fluxo = "A"
             st.rerun()
             
     with col2:
-        if st.button("B) Enteado(a) (Registrado no nome do cônjuge/companheiro)", use_container_width=True):
+        if st.button("B) Enteado(a) (Registrado no nome do cônjuge/companheiro)", width='stretch'):
             st.session_state.tipo_fluxo = "B"
             st.rerun()
             
     with col3:
-        if st.button("C) Criança/Adolescente sob Guarda ou Tutela", use_container_width=True):
+        if st.button("C) Criança/Adolescente sob Guarda ou Tutela", width='stretch'):
             st.session_state.tipo_fluxo = "C"
             st.rerun()
 
@@ -943,31 +1190,143 @@ def valida_dados_crianca_certidao(dados_certidao: dict, nome_informado: str, dat
 
     return True, "✅ Nome, data de nascimento e sexo conferem com a certidão."
 
-
-#---------------------------------------------------------------------------------------------------Funcoes de catalogo de kits
 def catalogo_kits_por_escolaridade():
+    # URL pública do Storage no Supabase
+    BASE_URL = "https://shmjscmivtujhrcjeicn.supabase.co/storage/v1/object/public/imagens/"
+    
+    kits_infantil = ["Dinossauro", "Abelha", "Borboleta", "Unicornio", "Cachorro"]
+    kits_efi = [f"EFI-{i}" for i in range(1, 12)]
+    kits_efii = [f"EFII-{i}" for i in range(1, 17)]
+    kits_em = [f"EM-{i}" for i in range(1, 14)]
+    
     return {
-        "Educação Infantil": [
-            "Kit Educação Infantil A",
-            "Kit Educação Infantil B",
-            "Kit Educação Infantil C"
-        ],
-        "Ensino Fundamental I": [
-            "Kit Fundamental I A",
-            "Kit Fundamental I B",
-            "Kit Fundamental I C"
-        ],
-        "Ensino Fundamental II": [
-            "Kit Fundamental II A",
-            "Kit Fundamental II B",
-            "Kit Fundamental II C"
-        ],
-        "Ensino Médio": [
-            "Kit Ensino Médio A",
-            "Kit Ensino Médio B",
-            "Kit Ensino Médio C"
-        ]
-    }
+        "Educação Infantil": kits_infantil,
+        "Ensino Fundamental I": kits_efi,
+        "Ensino Fundamental II": kits_efii,
+        "Ensino Médio": kits_em,
+        "Ensino Superior / Técnico": kits_em
+    }, BASE_URL
+
+def escolher_kits_colaborador():
+    st.divider()
+    st.subheader("🎒 Escolha dos Kits Escolares")
+    id_colaborador = st.session_state.colaborador["id"]   # ID real do banco
+    
+    db = SessionLocal()
+    try:
+        # Busca dependentes deste colaborador diretamente do banco
+        dependentes_colaborador = db.query(Dependente).filter(
+            Dependente.id_colaborador == id_colaborador
+        ).all()
+        
+        if not dependentes_colaborador:
+            st.warning("Nenhum dependente encontrado para este colaborador.")
+            return None
+            
+        catalogo, base_url = catalogo_kits_por_escolaridade()
+        escolhas = []
+        st.write(f"Você possui {len(dependentes_colaborador)} crédito(s) de kit.")
+        
+        # INJEÇÃO DO CSS PARA PADRONIZAR A ALTURA DAS IMAGENS
+        st.markdown("""
+            <style>
+            div[data-testid="stColumn"] img {
+                height: 180px !important;
+                object-fit: contain !important;
+            }
+            </style>
+        """, unsafe_allow_html=True)
+        
+        with st.form("form_escolha_kits"):
+            for dependente in dependentes_colaborador:
+                nome_filho = dependente.nome_filho
+                escolaridade = dependente.escolaridade
+                ano_escolar = dependente.ano_escola
+                genero = dependente.genero
+                id_dependente = dependente.id_dependente
+                
+                st.markdown(f"### 👶 {nome_filho}")
+                st.write(f"**Escolaridade:** {escolaridade} | **Ano escolar:** {ano_escolar}")
+                
+                opcoes_kits = catalogo.get(escolaridade, [])
+                if not opcoes_kits:
+                    st.error(f"Não existem kits cadastrados para a escolaridade: {escolaridade}")
+                    continue
+                
+                # ========================================================
+                # VITRINE VISUAL DE KITS (Exibição lado a lado)
+                # ========================================================
+                st.markdown(f"**Catálogo Disponível:**")
+                
+                itens_por_linha = 4
+                for i in range(0, len(opcoes_kits), itens_por_linha):
+                    colunas = st.columns(itens_por_linha)
+                    for j in range(itens_por_linha):
+                        if i + j < len(opcoes_kits):
+                            nome_kit = opcoes_kits[i+j]
+                            nome_arquivo = nome_kit.replace(" ", "")
+                            url_img = f"{base_url}{nome_arquivo}.png"
+                            
+                            with colunas[j]:
+                                st.image(url_img, caption=nome_kit, width='stretch')
+                
+                st.write("---")
+                # ========================================================
+
+                kit_escolhido = st.selectbox(
+                    f"Confirme o kit desejado para {nome_filho}:",
+                    [""] + opcoes_kits,
+                    format_func=lambda x: "Selecione um kit..." if x == "" else x,
+                    key=f"kit_dependente_{id_dependente}"
+                )
+
+                escolhas.append({
+                    "ID_Dependente": id_dependente,
+                    "ID_Colaborador": id_colaborador,
+                    "Nome_filho": nome_filho,
+                    "Gênero": genero,
+                    "Escolaridade": escolaridade,
+                    "Ano_escolar": ano_escolar,
+                    "Kit_Escolhido": kit_escolhido
+                })
+                
+            salvar_escolhas = st.form_submit_button("✅ Confirmar escolha dos kits")
+            
+        if not salvar_escolhas:
+            return None
+            
+        # Validação de seleção
+        erros = [f"⚠️ Selecione um kit para {e['Nome_filho']}." for e in escolhas if not e["Kit_Escolhido"]]
+        if erros:
+            for erro in erros:
+                st.error(erro)
+            return None
+            
+        # ==================== SALVAR ESCOLHAS NO BANCO ====================
+        novas_escolhas = []
+        for escolha in escolhas:
+            nova_escolha = EscolhaKit(
+                id_colaborador=escolha["ID_Colaborador"],
+                id_dependente=escolha["ID_Dependente"],
+                kit_escolhido=escolha["Kit_Escolhido"]
+            )
+            db.add(nova_escolha)
+            db.commit()
+            db.refresh(nova_escolha)
+            novas_escolhas.append({
+                "ID_Escolha": nova_escolha.id_escolha,
+                "ID_Dependente": nova_escolha.id_dependente,
+                "Kit_Escolhido": nova_escolha.kit_escolhido,
+                "Nome_filho": escolha["Nome_filho"],
+                "Escolaridade": escolha["Escolaridade"],
+                "Ano_escolar": escolha["Ano_escolar"]
+            })
+            
+        st.session_state.escolhas_kits = novas_escolhas
+        st.success("🎉 Kits escolhidos com sucesso!")
+        return novas_escolhas
+    finally:
+        db.close()
 
 # ===================== FUNÇÕES DE QRCODE =====================
 def monta_conteudo_qrcode():
@@ -1043,104 +1402,7 @@ def criar_registro_retirada_qrcode():
 
     finally:
         db.close()
-def escolher_kits_colaborador():
-    st.divider()
-    st.subheader("🎒 Escolha dos Kits Escolares")
 
-    cracha_colaborador = st.session_state.colaborador["Crachá"]
-    id_colaborador = st.session_state.colaborador["id"]   # ID real do banco
-
-    db = SessionLocal()
-    try:
-        # Busca dependentes deste colaborador diretamente do banco
-        dependentes_colaborador = db.query(Dependente).filter(
-            Dependente.id_colaborador == id_colaborador
-        ).all()
-
-        if not dependentes_colaborador:
-            st.warning("Nenhum dependente encontrado para este colaborador.")
-            return None
-
-        catalogo = catalogo_kits_por_escolaridade()
-        escolhas = []
-
-        st.write(f"Você possui {len(dependentes_colaborador)} crédito(s) de kit.")
-
-        with st.form("form_escolha_kits"):
-            for dependente in dependentes_colaborador:
-                nome_filho = dependente.nome_filho
-                escolaridade = dependente.escolaridade
-                ano_escolar = dependente.ano_escola
-                genero = dependente.genero
-                id_dependente = dependente.id_dependente
-
-                st.markdown(f"### {nome_filho}")
-                st.write(f"Escolaridade: {escolaridade}")
-                st.write(f"Ano escolar: {ano_escolar}")
-
-                opcoes_kits = catalogo.get(escolaridade, [])
-
-                if not opcoes_kits:
-                    st.error(f"Não existem kits cadastrados para a escolaridade: {escolaridade}")
-                    continue
-
-                kit_escolhido = st.selectbox(
-                    f"Escolha o kit de {nome_filho}",
-                    [""] + opcoes_kits,
-                    format_func=lambda x: "Selecione um kit..." if x == "" else x,
-                    key=f"kit_dependente_{id_dependente}"
-                )
-
-                escolhas.append({
-                    "ID_Dependente": id_dependente,
-                    "ID_Colaborador": id_colaborador,
-                    "Nome_filho": nome_filho,
-                    "Gênero": genero,
-                    "Escolaridade": escolaridade,
-                    "Ano_escolar": ano_escolar,
-                    "Kit_Escolhido": kit_escolhido
-                })
-
-            salvar_escolhas = st.form_submit_button("✅ Confirmar escolha dos kits")
-
-        if not salvar_escolhas:
-            return None
-
-        # Validação de seleção
-        erros = [f"❌ Selecione um kit para {e['Nome_filho']}." for e in escolhas if not e["Kit_Escolhido"]]
-        if erros:
-            for erro in erros:
-                st.error(erro)
-            return None
-
-        # ==================== SALVAR ESCOLHAS NO BANCO ====================
-        novas_escolhas = []
-        for escolha in escolhas:
-            nova_escolha = EscolhaKit(
-                id_colaborador=escolha["ID_Colaborador"],
-                id_dependente=escolha["ID_Dependente"],
-                kit_escolhido=escolha["Kit_Escolhido"]
-            )
-            db.add(nova_escolha)
-            db.commit()
-            db.refresh(nova_escolha)
-
-            novas_escolhas.append({
-                "ID_Escolha": nova_escolha.id_escolha,
-                "ID_Dependente": nova_escolha.id_dependente,
-                "Kit_Escolhido": nova_escolha.kit_escolhido,
-                "Nome_filho": escolha["Nome_filho"],
-                "Escolaridade": escolha["Escolaridade"],
-                "Ano_escolar": escolha["Ano_escolar"]
-            })
-
-        st.session_state.escolhas_kits = novas_escolhas
-        st.success("✅ Kits escolhidos com sucesso!")
-
-        return novas_escolhas
-
-    finally:
-        db.close()
 def exibir_qrcode_final():
     st.divider()
     st.subheader("🎟️ QR Code para Retirada")
@@ -1174,6 +1436,9 @@ def exibir_qrcode_final():
     )
 
     return imagem_qrcode
+
+
+
 
 #------------------------------------------------------------PAINEL DE CONTROLE------------------------------------------------------------------------
 def interface():
@@ -1213,7 +1478,7 @@ def interface():
                     st.caption(f"Ano: {dep.get('Ano_escolar', '')} | Nasc: {dep.get('Data_nascimento', '')}")
                     st.markdown("---")
                 
-                if st.button("🚀 Finalizar Carrinho e Escolher Kits", type="primary", use_container_width=True):
+                if st.button("🚀 Finalizar Carrinho e Escolher Kits", type="primary", width='stretch'):
                     # GRAVAÇÃO OFICIAL NO BANCO DE DADOS EM LOTE
                     db = SessionLocal()
                     try:
@@ -1287,7 +1552,7 @@ def interface():
             col1, col2 = st.columns([1, 1])
             with col1:
                 # Modifiquei o texto do botão para abranger tanto dependente quanto o próprio estagiário
-                if st.button("➕ Adicionar outro dependente/kit", type="primary"):
+                if st.button("➕ Adicionar outro dependente/kit", type="primary", width='stretch'):
                     st.session_state.aguardando_decisao = False
                     st.session_state.escolaridade = ""
                     st.session_state.ano_escolar = ""
@@ -1300,7 +1565,7 @@ def interface():
                     if 'sub_opcao_c' in st.session_state: del st.session_state['sub_opcao_c']
                     st.rerun()
             with col2:
-                if st.button("🚀 Finalizar carrinho e escolher kits"):
+                if st.button("🚀 Finalizar carrinho e escolher kits", width='stretch'):
                     db = SessionLocal()
                     try:
                         for dep in st.session_state.lista_dependentes:
