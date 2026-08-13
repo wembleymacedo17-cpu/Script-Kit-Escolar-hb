@@ -19,6 +19,11 @@ from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
 from conector_oracle import OracleConnector
 from conector_Postgre import SupabaseConnector
 
+MODELOS_GEMINI = [
+    "gemini-2.5-flash",        # 1ª Opção: Principal (Rápido e alta performance)
+    "gemini-1.5-flash",        # 2ª Opção: Backup super estável
+    "gemini-3.1-flash-lite",   # 3ª Opção: Terceira alternativa
+]
    
 load_dotenv()
 client_gemini = genai.Client()  
@@ -261,179 +266,6 @@ def tratar_erro_gemini(e, tentativa, tentativas):
         
     return False, "❌ Ocorreu um erro inesperado na leitura do documento."
 
-
-def analisa_guarda_judicial(arquivo, tentativas=3):
-    try:
-        arquivo.seek(0)
-        arquivo_bytes = arquivo.read()
-    except Exception:
-        return None, "Documento(s) ausente(s) ou ilegível(is)"
-    
-    mime_type = arquivo.type
-    for tentativa in range(1, tentativas + 1):
-        try:
-            response = client_gemini.models.generate_content(
-                model='gemini-3.1-flash-lite',
-                contents=[
-                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
-                    "Analise este termo ou certidão de guarda judicial e extraia os dados conforme as regras."
-                ],
-                config=generation_config_guarda_judicial,
-            )
-            return json.loads(response.text.strip()), None
-        except Exception as e:
-            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
-            if tentar_novo:
-                continue
-            return None, msg_erro
-            
-    return None, "Documento(s) ausente(s) ou ilegível(is)"
-
-
-def analisa_tutela_judicial(arquivo, tentativas=3):
-    try:
-        arquivo.seek(0)
-        arquivo_bytes = arquivo.read()
-    except Exception:
-        return None, "Documento(s) ausente(s) ou ilegível(is)"
-    
-    mime_type = arquivo.type
-    for tentativa in range(1, tentativas + 1):
-        try:
-            response = client_gemini.models.generate_content(
-                model='gemini-3.1-flash-lite',
-                contents=[
-                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
-                    "Analise este termo de tutela judicial e extraia os dados conforme as regras."
-                ],
-                config=generation_config_tutela_judicial,
-            )
-            return json.loads(response.text.strip()), None
-        except Exception as e:
-            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
-            if tentar_novo:
-                continue
-            return None, msg_erro
-            
-    return None, "Documento(s) ausente(s) ou ilegível(is)"
-
-
-def analisa_certidao_averbacao(arquivo, tentativas=3):
-    try:
-        arquivo.seek(0)
-        arquivo_bytes = arquivo.read()
-    except Exception:
-        return None, "⚠️ Erro ao ler o arquivo. Tente novamente."
-    
-    mime_type = arquivo.type
-    for tentativa in range(1, tentativas + 1):
-        try:
-            response = client_gemini.models.generate_content(
-                model='gemini-3.1-flash-lite',
-                contents=[
-                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
-                    "Analise esta certidão de nascimento com averbação de adoção e extraia os dados conforme as regras."
-                ],
-                config=generation_config_adocao_averbacao,
-            )
-            return json.loads(response.text.strip()), None
-        except Exception as e:
-            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
-            if tentar_novo:
-                continue
-            return None, msg_erro
-            
-    return None, "Não foi possível validar o documento."
-
-
-def analisa_guarda_adocao(arquivo, tentativas=3):
-    try:
-        arquivo.seek(0)
-        arquivo_bytes = arquivo.read()
-    except Exception:
-        return None, "⚠️ Erro ao ler o arquivo. Tente novamente."
-    
-    mime_type = arquivo.type
-    for tentativa in range(1, tentativas + 1):
-        try:
-            response = client_gemini.models.generate_content(
-                model='gemini-3.1-flash-lite',
-                contents=[
-                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
-                    "Analise este documento judicial de guarda para fins de adoção e extraia os dados conforme as regras."
-                ],
-                config=generation_config_guarda_adocao,
-            )
-            return json.loads(response.text.strip()), None
-        except Exception as e:
-            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
-            if tentar_novo:
-                continue
-            return None, msg_erro
-            
-    return None, "Não foi possível validar o documento judicial."
-
-
-def analisa_uniao_estavel(arquivo, tentativas=3):
-    try:
-        arquivo.seek(0)
-        arquivo_bytes = arquivo.read()
-    except Exception:
-        return None, "⚠️ Erro ao ler o arquivo de união estável. Tente novamente."
-    
-    mime_type = arquivo.type
-    for tentativa in range(1, tentativas + 1):
-        try:
-            response = client_gemini.models.generate_content(
-                model='gemini-3.1-flash-lite',
-                contents=[
-                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
-                    "Analise esta declaração de união estável e extraia os dados conforme as regras."
-                ],
-                config=generation_config_uniao_estavel,
-            )
-            return json.loads(response.text.strip()), None
-        except Exception as e:
-            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
-            if tentar_novo:
-                continue
-            return None, msg_erro
-            
-    return None, "⚠️ Não foi possível validar o documento."
-
-
-def analisa_certidao(arquivo, tentativas=3):
-    try:
-        arquivo.seek(0)
-        arquivo_bytes = arquivo.read()
-    except Exception:
-        return None, "❌ Erro ao ler o arquivo. Tente fazer o upload novamente."
-
-    mime_type = arquivo.type
-    for tentativa in range(1, tentativas + 1):
-        try:
-            response = client_gemini.models.generate_content(
-                model='gemini-3.1-flash-lite',
-                contents=[
-                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
-                    "Analise o documento e retorne os dados no formato estruturado."
-                ],
-                config=generation_config_certidao,
-            )
-            texto_limpo = response.text.strip()
-            return json.loads(texto_limpo), None
-
-        except json.JSONDecodeError:
-            return None, "❌ Resposta da IA em formato inesperado. Tente novamente."
-        except Exception as e:
-            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
-            if tentar_novo:
-                continue
-            return None, msg_erro
-
-    return None, "❌ Não foi possível validar após várias tentativas."
-
-
 def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
     nome_pai = dados_certidao.get("nome_pai") or ""
     nome_mae = dados_certidao.get("nome_mae") or ""
@@ -452,37 +284,160 @@ def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
 
     return False, None
 
+# =========================================================================
+# CONFIGURAÇÃO DE MODELOS E RESILIÊNCIA DA IA (3 MODELOS EM FALLBACK)
+# =========================================================================
+MODELOS_GEMINI = [
+    "gemini-2.5-flash",        # 1ª Opção: Principal (Rápido e alta performance)
+    "gemini-1.5-flash",        # 2ª Opção: Backup super estável
+    "gemini-3.1-flash-lite",   # 3ª Opção: Terceira alternativa
+]
 
-def analisa_certidao_complementar(arquivo, tentativas=3):
+# =========================================================================
+# CONFIGURAÇÃO DE MODELOS E RESILIÊNCIA DA IA (3 MODELOS EM FALLBACK)
+# =========================================================================
+MODELOS_GEMINI = [
+    "gemini-2.5-flash",        # 1ª Opção: Principal (Rápido e alta performance)
+    "gemini-1.5-flash",        # 2ª Opção: Backup super estável
+    "gemini-3.1-flash-lite",   # 3ª Opção: Terceira alternativa
+]
+
+def executar_gemini_com_fallback(contents_data, config_schema, tentativas_por_modelo=2):
+    """
+    Executa chamadas à API alternando sequencialmente por até 3 modelos.
+    Se o 1º falhar 2x -> tenta o 2º. Se o 2º falhar 2x -> tenta o 3º.
+    """
+    ERROS_RETRY = ("503", "unavailable", "timeout", "timed out", "429", "high demand", "disconnected", "remoteprotocolerror", "reset")
+
+    for modelo in MODELOS_GEMINI:
+        for tentativa in range(1, tentativas_por_modelo + 1):
+            try:
+                print(f"🤖 [IA Studio] Testando modelo '{modelo}' (Tentativa {tentativa}/{tentativas_por_modelo})...")
+                
+                response = client_gemini.models.generate_content(
+                    model=modelo,
+                    contents=contents_data,
+                    config=config_schema,
+                )
+                
+                texto_limpo = response.text.strip()
+                dados_json = json.loads(texto_limpo)
+                
+                print(f"✅ Sucesso na leitura usando o modelo '{modelo}'!")
+                return dados_json, None
+
+            except json.JSONDecodeError:
+                return None, "⚠️ Resposta da IA em formato inesperado. Tente novamente."
+
+            except Exception as e:
+                erro_str = str(e).lower()
+                print(f"🔍 ERRO CAPTURADO [{modelo}]: {repr(e)}")
+
+                tem_retry = any(cod in erro_str for cod in ERROS_RETRY)
+                if tem_retry and tentativa < tentativas_por_modelo:
+                    tempo_espera = tentativa * 3  # Espera 3 segundos no retry
+                    print(f"⏳ Servidor ocupado. Aguardando {tempo_espera}s...")
+                    time.sleep(tempo_espera)
+                    continue
+                elif tem_retry:
+                    print(f"🚨 Modelo '{modelo}' indisponível. Alternando para a próxima opção da lista...")
+                    break  # Pula imediatamente para o próximo modelo de MODELOS_GEMINI
+                else:
+                    return None, "⚠️ Erro inesperado no processamento do documento."
+
+    # Se passar por TODOS os 3 modelos e nenhum responder:
+    return None, "⚠️ Todos os serviços de IA estão com alta demanda momentânea. Por favor, tente novamente em alguns instantes."
+
+
+def analisa_certidao(arquivo):
     try:
         arquivo.seek(0)
         arquivo_bytes = arquivo.read()
+        mime_type = arquivo.type
+        contents = [
+            types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+            "Analise o documento e retorne os dados no formato estruturado."
+        ]
+        return executar_gemini_com_fallback(contents, generation_config_certidao)
     except Exception:
-        return None, "❌ Erro ao ler o arquivo. Tente fazer o upload novamente."
+        return None, "Erro ao ler o arquivo. Tente fazer o upload novamente."
 
-    mime_type = arquivo.type
-    for tentativa in range(1, tentativas + 1):
-        try:
-            response = client_gemini.models.generate_content(
-                model='gemini-3.1-flash-lite',
-                contents=[
-                    types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
-                    "Analise o documento e retorne os dados no formato estruturado."
-                ],
-                config=generation_config_doc_complementar,
-            )
-            texto_limpo = response.text.strip()
-            return json.loads(texto_limpo), None
+def analisa_uniao_estavel(arquivo):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+        mime_type = arquivo.type
+        contents = [
+            types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+            "Analise esta declaração de união estável e extraia os dados conforme as regras."
+        ]
+        return executar_gemini_com_fallback(contents, generation_config_uniao_estavel)
+    except Exception:
+        return None, "Erro ao ler o arquivo de união estável."
 
-        except json.JSONDecodeError:
-            return None, "❌ Resposta da IA em formato inesperado. Tente novamente."
-        except Exception as e:
-            tentar_novo, msg_erro = tratar_erro_gemini(e, tentativa, tentativas)
-            if tentar_novo:
-                continue
-            return None, msg_erro
+def analisa_guarda_adocao(arquivo):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+        mime_type = arquivo.type
+        contents = [
+            types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+            "Analise este documento judicial de guarda para fins de adoção e extraia os dados conforme as regras."
+        ]
+        return executar_gemini_com_fallback(contents, generation_config_guarda_adocao)
+    except Exception:
+        return None, "Erro ao ler o arquivo de guarda para adoção."
 
-    return None, "❌ Não foi possível validar após várias tentativas."
+def analisa_certidao_averbacao(arquivo):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+        mime_type = arquivo.type
+        contents = [
+            types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+            "Analise esta certidão de nascimento com averbação de adoção e extraia os dados conforme as regras."
+        ]
+        return executar_gemini_com_fallback(contents, generation_config_adocao_averbacao)
+    except Exception:
+        return None, "Erro ao ler a certidão averbada."
+def analisa_guarda_judicial(arquivo):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+        mime_type = arquivo.type
+        contents = [
+            types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+            "Analise este termo ou certidão de guarda judicial e extraia os dados conforme as regras."
+        ]
+        return executar_gemini_com_fallback(contents, generation_config_guarda_judicial)
+    except Exception:
+        return None, "Documento(s) ausente(s) ou ilegível(is)"
+
+def analisa_tutela_judicial(arquivo):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+        mime_type = arquivo.type
+        contents = [
+            types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+            "Analise este termo de tutela judicial e extraia os dados conforme as regras."
+        ]
+        return executar_gemini_com_fallback(contents, generation_config_tutela_judicial)
+    except Exception:
+        return None, "Documento(s) ausente(s) ou ilegível(is)"
+
+def analisa_certidao_complementar(arquivo):
+    try:
+        arquivo.seek(0)
+        arquivo_bytes = arquivo.read()
+        mime_type = arquivo.type
+        contents = [
+            types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
+            "Analise o documento e retorne os dados no formato estruturado."
+        ]
+        return executar_gemini_com_fallback(contents, generation_config_doc_complementar)
+    except Exception:
+        return None, "Erro ao ler o arquivo de casamento/divórcio."
 
 
 
