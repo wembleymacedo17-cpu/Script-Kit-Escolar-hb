@@ -1523,6 +1523,14 @@ def interface():
     else:
         # ===================== FASE 2: TRIAGEM DE VÍNCULO =====================
         st.success(f"👤 Colaborador: {st.session_state.colaborador['Nome']} | ✅ Contato salvo.")
+
+        # 💡 ALERTA VISUAL PARA DISPOSITIVOS MÓVEIS (CELULAR)
+        if st.session_state.lista_dependentes:
+            qtd_itens = len(st.session_state.lista_dependentes)
+            st.warning(
+                f"🛒 **Atenção:** Você tem **{qtd_itens}** item(ns) no seu carrinho! "
+                f"Toque nas setas **( >> )** no canto superior esquerdo da tela para abrir o menu lateral e **Finalizar o Pedido**."
+            )
         
         # -------------------------------------------------------------------------
         # TELAS DE CONTROLE UNIVERSAL
