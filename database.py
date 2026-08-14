@@ -1,9 +1,8 @@
 # database.py
-# database.py
 import os
 from datetime import datetime
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
 
@@ -58,6 +57,11 @@ class Dependente(Base):
     ano_escola = Column(String(50))
     data_cadastro = Column(DateTime, default=datetime.utcnow)
     revisao_rh = Column(String(50))
+
+    # 🔒 NOVAS COLUNAS DE COMPLIANCE
+    aceite_ia = Column(Boolean, default=False)
+    aceite_lgpd = Column(Boolean, default=False)
+    data_aceite = Column(DateTime, nullable=True)
 
     colaborador = relationship("Colaborador", back_populates="dependentes")
     escolha = relationship("EscolhaKit", back_populates="dependente", uselist=False)
