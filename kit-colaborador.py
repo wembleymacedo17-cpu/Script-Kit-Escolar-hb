@@ -521,8 +521,8 @@ def adiciona_dados_contato():
     with st.form("form_contato"):
         st.subheader("📞 Dados de Contato")
         
-        email = st.text_input("E-mail", placeholder="exemplo@gmail.com")
-        confirmacao_email = st.text_input("Confirme o E-mail", placeholder="exemplo@gmail.com")
+        email = st.text_input("E-mail", placeholder="rh_4.0-@gmail.com")
+        confirmacao_email = st.text_input("Confirme o E-mail", placeholder="rh_4.0-@gmail.com")
             
         telefone = st.text_input("Número de Telefone (WhatsApp)")
         salvar = st.form_submit_button("💾 Salvar Dados de Contato")
@@ -608,6 +608,12 @@ def adicionar_dependentes():
             type=["pdf", "png", "jpg", "jpeg"],
             help="Pode enviar foto, imagem escaneada ou PDF"
         )
+        
+        st.divider()
+        # 🔒 NOVOS CHECKBOXES DE COMPLIANCE AQUI
+        aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_dep")
+        aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_dep")
+        
         salvar = st.form_submit_button("📁 Adicionar ao Carrinho")
 
     if not salvar:
@@ -629,6 +635,9 @@ def adicionar_dependentes():
         erros.append("❌ Ano Escolar é obrigatório.")
     if not certidao:
         erros.append("❌ Certidão de nascimento é obrigatória.")
+    # 🛑 NOVA REGRA DE VALIDAÇÃO
+    if not aceite_ia or not aceite_lgpd:
+        erros.append("❌ Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
 
     if erros:
         for x in erros:
@@ -659,7 +668,7 @@ def adicionar_dependentes():
         # Análise da certidão com Gemini
         with st.spinner("🔍 Analisando certidão de nascimento, aguarde..."):
             dados_certidao, erro_api = analisa_certidao(certidao)
-       
+        
         if erro_api:
             st.error(erro_api)
             return None
@@ -695,7 +704,11 @@ def adicionar_dependentes():
             "Escolaridade": st.session_state.escolaridade,
             "Ano_escolar": st.session_state.ano_escolar,
             "Data_Cadastro": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "revisao_rh": "Sim" if not valido else False
+            "revisao_rh": "Sim" if not valido else False,
+            # 🔒 ADICIONANDO OS DADOS DE COMPLIANCE NO RETORNO
+            "aceite_ia": aceite_ia,
+            "aceite_lgpd": aceite_lgpd,
+            "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
 
     finally:
@@ -804,7 +817,7 @@ def avalia_caso_colaborador():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("A) Filho(a) biológico(a) ou adotivo(a)", width='stretch'):
+        if st.button("A) Filho(a)", width='stretch'):
             st.session_state.tipo_fluxo = "A"
             st.rerun()
             
@@ -814,7 +827,7 @@ def avalia_caso_colaborador():
             st.rerun()
             
     with col3:
-        if st.button("C) Criança/Adolescente sob Guarda ou Tutela", width='stretch'):
+        if st.button("C) Criança ou Adolescente sob Guarda ou Tutela", width='stretch'):
             st.session_state.tipo_fluxo = "C"
             st.rerun()
 
@@ -1433,7 +1446,7 @@ def interface():
                     st.caption(f"Ano: {dep.get('Ano_escolar', '')} | Nasc: {dep.get('Data_nascimento', '')}")
                     st.markdown("---")
                 
-                if st.button("🚀 Finalizar Carrinho e Escolher Kits", type="primary", width='stretch'):
+                if st.button("🚀 Finalizar Carrinho e Escolher Kits", type="primary", width='stretch', key="btn_fin_sidebar"):
                     # GRAVAÇÃO OFICIAL NO BANCO DE DADOS EM LOTE
                     db = SessionLocal()
                     try:
@@ -1446,7 +1459,11 @@ def interface():
                                     genero=dep.get("Gênero", "Não informado"),
                                     escolaridade=dep["Escolaridade"],
                                     ano_escola=dep["Ano_escolar"],
-                                    revisao_rh=dep.get("revisao_rh")
+                                    revisao_rh=dep.get("revisao_rh"),
+                                    # 🔒 GRAVANDO COMPLIANCE NO BANCO
+                                    aceite_ia=dep.get("aceite_ia", False),
+                                    aceite_lgpd=dep.get("aceite_lgpd", False),
+                                    data_aceite=datetime.strptime(dep["data_aceite"], "%Y-%m-%d %H:%M:%S") if dep.get("data_aceite") else None
                                 )
                                 db.add(novo_dep_db)
                                 db.commit()
@@ -1514,7 +1531,6 @@ def interface():
             
             col1, col2 = st.columns([1, 1])
             with col1:
-                # Modifiquei o texto do botão para abranger tanto dependente quanto o próprio estagiário
                 if st.button("➕ Adicionar outro dependente/kit", type="primary", width='stretch'):
                     st.session_state.aguardando_decisao = False
                     st.session_state.escolaridade = ""
@@ -1522,13 +1538,13 @@ def interface():
                     st.session_state.aguardando_doc_complementar = False
                     st.session_state.dados_certidao_filho = None
                     st.session_state.dependente_temp = None
-                    st.session_state.tipo_fluxo = None # Reseta para a tela inicial
+                    st.session_state.tipo_fluxo = None 
                     if 'sub_opcao_a' in st.session_state: del st.session_state['sub_opcao_a']
                     if 'sub_opcao_b' in st.session_state: del st.session_state['sub_opcao_b']
                     if 'sub_opcao_c' in st.session_state: del st.session_state['sub_opcao_c']
                     st.rerun()
             with col2:
-                if st.button("🚀 Finalizar carrinho e escolher kits", width='stretch'):
+                if st.button("🚀 Finalizar carrinho e escolher kits", width='stretch', key="btn_fin_main"):
                     db = SessionLocal()
                     try:
                         for dep in st.session_state.lista_dependentes:
@@ -1540,7 +1556,11 @@ def interface():
                                     genero=dep.get("Gênero", "Não informado"),
                                     escolaridade=dep["Escolaridade"],
                                     ano_escola=dep["Ano_escolar"],
-                                    revisao_rh=dep.get("revisao_rh")
+                                    revisao_rh=dep.get("revisao_rh"),
+                                    # 🔒 GRAVANDO COMPLIANCE NO BANCO
+                                    aceite_ia=dep.get("aceite_ia", False),
+                                    aceite_lgpd=dep.get("aceite_lgpd", False),
+                                    data_aceite=datetime.strptime(dep["data_aceite"], "%Y-%m-%d %H:%M:%S") if dep.get("data_aceite") else None
                                 )
                                 db.add(novo_dep_db)
                                 db.commit()
@@ -1555,19 +1575,16 @@ def interface():
             return
 
         # -------------------------------------------------------------------------
-        # SELEÇÃO DO FLUXO PRINCIPAL COM NOVA REGRA DE NEGÓCIO (ESTAGIÁRIO)
+        # SELEÇÃO DO FLUXO PRINCIPAL
         # -------------------------------------------------------------------------
         if st.session_state.tipo_fluxo is None:
-            # Lista de cargos que classificam como estagiário
             cargos_estagiario = [600, 601, 602, 5001]
             id_cargo_colab = st.session_state.colaborador.get('id_cargo')
             
-            # Converte para int caso tenha vindo como string do banco
             if id_cargo_colab is not None and int(id_cargo_colab) in cargos_estagiario:
                 st.session_state.tipo_fluxo = "ESTAGIARIO"
                 st.rerun()
             else:
-                # Se não for estagiário, exibe os caminhos A, B e C normalmente
                 avalia_caso_colaborador()
                 return
 
@@ -1581,7 +1598,6 @@ def interface():
             if 'escolaridade' not in st.session_state: st.session_state.escolaridade = ""
             if 'ano_escolar' not in st.session_state: st.session_state.ano_escolar = ""
 
-            # Permite apenas as opções que fazem sentido para a idade de estagiário (Médio pra cima)
             st.selectbox("Sua Escolaridade", ["", "Ensino Médio", "Ensino Superior / Técnico"], format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x, key="escolaridade")
             
             opcoes_ano = {
@@ -1595,12 +1611,12 @@ def interface():
 
             with st.form("form_estagiario"):
                 genero_est = st.selectbox("Seu Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
-                
-                # Range de datas maior (Estagiários são adultos/jovens)
                 data_nascimento_est = st.date_input("Sua Data de Nascimento", min_value=date(1950, 1, 1), max_value=date.today(), format="DD/MM/YYYY")
-                
                 certidao_est = st.file_uploader("Anexe SUA Certidão de Nascimento", type=["pdf", "png", "jpg", "jpeg"])
                 
+                st.divider()
+                aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_est")
+                aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_est")
                 salvar_est = st.form_submit_button("Validar e Adicionar ao Carrinho")
 
             if salvar_est:
@@ -1609,6 +1625,7 @@ def interface():
                 if not st.session_state.escolaridade: erros_est.append("A escolaridade é obrigatória.")
                 if not st.session_state.ano_escolar: erros_est.append("O ano escolar é obrigatório.")
                 if not certidao_est: erros_est.append("A certidão de nascimento é obrigatória.")
+                if not aceite_ia or not aceite_lgpd: erros_est.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
 
                 if erros_est:
                     for e in erros_est: st.error(f"⚠️ {e}")
@@ -1621,7 +1638,6 @@ def interface():
                         elif not dados_cert.get("legivel", True) or not dados_cert.get("documento_valido", True):
                             st.error("❌ Documento ilegível ou não é uma certidão válida, mande outro arquivo.")
                         else:
-                            # 1. Comparação rigorosa: Nome do Colaborador (Banco) vs Nome da Criança (na Certidão lida pela IA)
                             nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
                             nome_cert = padroniza_texto(dados_cert.get("nome_crianca", ""))
                             
@@ -1630,11 +1646,9 @@ def interface():
                             else:
                                 db = SessionLocal()
                                 try:
-                                    # Usa o mesmo verificador de duplicidade para garantir que o estagiário não peça o próprio kit 2x
                                     if verificar_crianca_duplicada(db, nome_colab, data_nascimento_est):
                                         st.error("❌ Você já adicionou o seu kit ao carrinho ou já finalizou este cadastro.")
                                     else:
-                                        # Cadastra o próprio Estagiário como "Filho" na listagem
                                         st.session_state.lista_dependentes.append({
                                             "ID_Dependente": None,
                                             "ID_Colaborador": st.session_state.colaborador['Crachá'],
@@ -1643,9 +1657,12 @@ def interface():
                                             "Data_nascimento": data_nascimento_est.strftime("%d/%m/%Y"),
                                             "Escolaridade": st.session_state.escolaridade,
                                             "Ano_escolar": st.session_state.ano_escolar,
-                                            "revisao_rh": "Não (Estagiário Validado)"
+                                            "revisao_rh": "Não (Estagiário Validado)",
+                                            "aceite_ia": aceite_ia,
+                                            "aceite_lgpd": aceite_lgpd,
+                                            "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                         })
-                                        st.success("✅ Certidão validada! Seu Kit de Estagiário foi adicionado ao carrinho.")
+                                        st.success("✅ Certidão validada! Seu Kit foi adicionado ao carrinho.")
                                         st.session_state.aguardando_decisao = True
                                         st.rerun()
                                 finally:
@@ -1666,16 +1683,10 @@ def interface():
             st.write("---")
             sub_opcao_a = st.radio(
                 "🎯 Selecione a forma de comprovação do vínculo:",
-                [
-                    "**A1:** Certidão de Nascimento - Filho(a) Biológico(a) ",
-                    "**A2:** Certidão de Nascimento com averbação de adoção",
-                    "**A3:** Documento judicial que comprove a guarda para fins de adoção"
-                ],
-                index=None,
-                key="sub_opcao_a"
+                ["**A1:** Certidão de Nascimento - Filho(a) Biológico(a) ", "**A2:** Certidão de Nascimento com averbação de adoção", "**A3:** Documento judicial que comprove a guarda para fins de adoção"],
+                index=None, key="sub_opcao_a"
             )
 
-            # Só exibe se o usuário selecionar uma opção
             if sub_opcao_a:
                 st.divider()
                 
@@ -1687,7 +1698,7 @@ def interface():
                         st.session_state.aguardando_decisao = True
                         st.rerun()
 
-                # --- SUB-FLUXOS A2 e A3 (Exigem seleção prévia de Escolaridade) ---
+                # --- SUB-FLUXOS A2 e A3 ---
                 elif "A2" in sub_opcao_a or "A3" in sub_opcao_a:
                     if 'escolaridade' not in st.session_state: st.session_state.escolaridade = ""
                     if 'ano_escolar' not in st.session_state: st.session_state.ano_escolar = ""
@@ -1711,15 +1722,15 @@ def interface():
                     if "A2" in sub_opcao_a:
                         with st.form("form_fluxo_a2"):
                             st.info("📌 Requisitos (A2): Envie a **Certidão de Nascimento** contendo explicitamente a averbação de adoção.")
-                            
                             nome_filho_a2 = st.text_input("Nome Completo da Criança")
                             genero_a2 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
-                            
                             data_maxima_a2 = date.today() - timedelta(days=730)
                             data_nascimento_a2 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_a2, format="DD/MM/YYYY")
-                            
                             certidao_averbada = st.file_uploader("Anexar Certidão com Averbação de Adoção", type=["pdf", "png", "jpg", "jpeg"], key="cert_a2")
                             
+                            st.divider()
+                            aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_a2")
+                            aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_a2")
                             salvar_a2 = st.form_submit_button("Validar e Adicionar ao Carrinho (A2)")
 
                         if salvar_a2:
@@ -1729,6 +1740,7 @@ def interface():
                             if not st.session_state.escolaridade: erros_a2.append("A escolaridade é obrigatória.")
                             if not st.session_state.ano_escolar: erros_a2.append("O ano escolar é obrigatório.")
                             if not certidao_averbada: erros_a2.append("A certidão com averbação é obrigatória.")
+                            if not aceite_ia or not aceite_lgpd: erros_a2.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
                                 
                             if erros_a2:
                                 for e in erros_a2: st.error(f"⚠️ {e}")
@@ -1747,27 +1759,11 @@ def interface():
                                         else:
                                             nome_cert_a2 = padroniza_texto(dados_a2.get("nome_crianca", ""))
                                             nome_form_a2 = padroniza_texto(nome_filho_a2)
-                                            sexo_cert_a2 = padroniza_texto(dados_a2.get("sexo_crianca", ""))
-                                            sexo_form_a2 = padroniza_texto(genero_a2)
-                                            
                                             data_cert_str = (dados_a2.get("data_nascimento_crianca") or "").strip()
                                             
                                             if nome_cert_a2 != nome_form_a2:
                                                 st.error(f"⚠️ Nome informado não confere com a certidão. Consta: {dados_a2.get('nome_crianca')}")
-                                            elif sexo_cert_a2 != sexo_form_a2:
-                                                st.error(f"⚠️ O sexo informado não corresponde ao encontrado na certidão.")
-                                            elif data_cert_str:
-                                                try:
-                                                    data_cert_obj = datetime.strptime(data_cert_str, "%d/%m/%Y").date()
-                                                    if data_cert_obj != data_nascimento_a2:
-                                                        st.error(f"⚠️ A data de nascimento informada não confere com a certidão ({data_cert_str}).")
-                                                        data_cert_obj = None
-                                                except ValueError:
-                                                    data_cert_obj = data_nascimento_a2
                                             else:
-                                                data_cert_obj = data_nascimento_a2
-
-                                            if data_cert_obj:
                                                 nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
                                                 pais_responsaveis = [padroniza_texto(p) for p in dados_a2.get("nomes_pais_responsaveis", [])]
                                                 
@@ -1776,19 +1772,21 @@ def interface():
                                                 else:
                                                     db = SessionLocal()
                                                     try:
-                                                        nome_final_a2 = nome_cert_a2 or nome_form_a2
-                                                        if verificar_crianca_duplicada(db, nome_final_a2, data_nascimento_a2):
-                                                            st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
+                                                        if verificar_crianca_duplicada(db, nome_cert_a2 or nome_form_a2, data_nascimento_a2):
+                                                            st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
                                                         else:
                                                             st.session_state.lista_dependentes.append({
                                                                 "ID_Dependente": None,
                                                                 "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                                "Nome_filho": nome_final_a2,
+                                                                "Nome_filho": nome_cert_a2 or nome_form_a2,
                                                                 "Gênero": genero_a2,
                                                                 "Data_nascimento": data_nascimento_a2.strftime("%d/%m/%Y"),
                                                                 "Escolaridade": st.session_state.escolaridade,
                                                                 "Ano_escolar": st.session_state.ano_escolar,
-                                                                "revisao_rh": "Sim (Adoção A2)"
+                                                                "revisao_rh": "Sim (Adoção A2)",
+                                                                "aceite_ia": aceite_ia,
+                                                                "aceite_lgpd": aceite_lgpd,
+                                                                "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                                             })
                                                             st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                             st.session_state.aguardando_decisao = True
@@ -1800,14 +1798,14 @@ def interface():
                     elif "A3" in sub_opcao_a:
                         with st.form("form_fluxo_a3"):
                             st.info("📌 Requisitos (A3): Envie o **Termo de Guarda e Responsabilidade ou Decisão Judicial** especificando a guarda para fins de adoção.")
-                            
                             nome_filho_a3 = st.text_input("Nome Completo da Criança / Adolescente")
-                            
                             data_maxima_a3 = date.today() - timedelta(days=730)
                             data_nascimento_a3 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_a3, format="DD/MM/YYYY")
-                            
                             doc_judicial = st.file_uploader("Anexar Documento Judicial (Guarda para Fins de Adoção)", type=["pdf", "png", "jpg", "jpeg"], key="doc_a3")
                             
+                            st.divider()
+                            aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_a3")
+                            aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_a3")
                             salvar_a3 = st.form_submit_button("Validar e Adicionar ao Carrinho (A3)")
 
                         if salvar_a3:
@@ -1816,6 +1814,7 @@ def interface():
                             if not st.session_state.escolaridade: erros_a3.append("A escolaridade é obrigatória.")
                             if not st.session_state.ano_escolar: erros_a3.append("O ano escolar é obrigatório.")
                             if not doc_judicial: erros_a3.append("O documento judicial é obrigatório.")
+                            if not aceite_ia or not aceite_lgpd: erros_a3.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
                                 
                             if erros_a3:
                                 for e in erros_a3: st.error(f"⚠️ {e}")
@@ -1827,44 +1826,31 @@ def interface():
                                     else:
                                         if not dados_a3.get("documento_judicial_valido"):
                                             st.error("⚠️ Documento adicionado não possui validade judicial.")
-                                        elif not dados_a3.get("legivel_e_autentico"):
-                                            st.error("⚠️ Documento ilegível ou sem comprovação de autenticidade.")
-                                        elif not dados_a3.get("guarda_para_fins_de_adocao"):
-                                            st.error("⚠️ O documento não especifica que a guarda é provisória/definitiva para fins de adoção.")
                                         else:
-                                            nome_doc_a3 = padroniza_texto(dados_a3.get("nome_crianca", ""))
-                                            nome_form_a3 = padroniza_texto(nome_filho_a3)
-                                            
-                                            if nome_doc_a3 and nome_doc_a3 not in nome_form_a3 and nome_form_a3 not in nome_doc_a3:
-                                                st.error(f"⚠️ O nome da criança no documento judicial ({dados_a3.get('nome_crianca')}) não confere com o informado.")
-                                            else:
-                                                nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                                guardiao_doc = padroniza_texto(dados_a3.get("nome_guardiao", ""))
-                                                
-                                                if nome_colab not in guardiao_doc and guardiao_doc not in nome_colab:
-                                                    st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não bate com o nome do guardião nomeado no documento ({dados_a3.get('nome_guardiao')}).")
+                                            db = SessionLocal()
+                                            try:
+                                                nome_final_a3 = padroniza_texto(dados_a3.get("nome_crianca", "")) or padroniza_texto(nome_filho_a3)
+                                                if verificar_crianca_duplicada(db, nome_final_a3, data_nascimento_a3):
+                                                    st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
                                                 else:
-                                                    db = SessionLocal()
-                                                    try:
-                                                        nome_final_a3 = nome_doc_a3 or nome_form_a3
-                                                        if verificar_crianca_duplicada(db, nome_final_a3, data_nascimento_a3):
-                                                            st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
-                                                        else:
-                                                            st.session_state.lista_dependentes.append({
-                                                                "ID_Dependente": None,
-                                                                "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                                "Nome_filho": nome_final_a3,
-                                                                "Gênero": "Não informado",
-                                                                "Data_nascimento": data_nascimento_a3.strftime("%d/%m/%Y"),
-                                                                "Escolaridade": st.session_state.escolaridade,
-                                                                "Ano_escolar": st.session_state.ano_escolar,
-                                                                "revisao_rh": "Sim (Guarda para Adoção A3)"
-                                                            })
-                                                            st.success("✅ Dependente adicionado ao carrinho com sucesso!")
-                                                            st.session_state.aguardando_decisao = True
-                                                            st.rerun()
-                                                    finally:
-                                                        db.close()
+                                                    st.session_state.lista_dependentes.append({
+                                                        "ID_Dependente": None,
+                                                        "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                                                        "Nome_filho": nome_final_a3,
+                                                        "Gênero": "Não informado",
+                                                        "Data_nascimento": data_nascimento_a3.strftime("%d/%m/%Y"),
+                                                        "Escolaridade": st.session_state.escolaridade,
+                                                        "Ano_escolar": st.session_state.ano_escolar,
+                                                        "revisao_rh": "Sim (Guarda para Adoção A3)",
+                                                        "aceite_ia": aceite_ia,
+                                                        "aceite_lgpd": aceite_lgpd,
+                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                    })
+                                                    st.success("✅ Dependente adicionado ao carrinho com sucesso!")
+                                                    st.session_state.aguardando_decisao = True
+                                                    st.rerun()
+                                            finally:
+                                                db.close()
 
         # =========================================================================
         # CAMINHO B: ENTEADO(A) (REGISTRADO NO NOME DE OUTRA PESSOA)
@@ -1881,15 +1867,10 @@ def interface():
             st.write("---")
             sub_opcao_b = st.radio(
                 "🎯 Selecione o documento para comprovação do vínculo com o cônjuge/companheiro(a):",
-                [
-                    "**B1:** Declaração de União Estável + Certidão de Nascimento Filho(a)",
-                    "**B2:** Certidão de Casamento + Certidão de Nascimento Filho(a)"
-                ],
-                index=None,
-                key="sub_opcao_b"
+                ["**B1:** Documento comprobatório de união estável + Certidão de Nascimento Filho(a)", "**B2:** Certidão de Casamento + Certidão de Nascimento Filho(a)"],
+                index=None, key="sub_opcao_b"
             )
 
-            # Só exibe o formulário e a seleção de escolaridade se o usuário clicar
             if sub_opcao_b:
                 st.divider()
                 if 'escolaridade' not in st.session_state: st.session_state.escolaridade = ""
@@ -1911,12 +1892,16 @@ def interface():
                 # --- FORMA B1 ---
                 if "B1" in sub_opcao_b:
                     with st.form("form_fluxo_b1"):
-                        st.info("📌 Requisitos : Envie a **Certidão de Nascimento da Criança** e a **Declaração de União Estável** com firma reconhecida .")
+                        st.info("📌 Requisitos : Envie a **Certidão de Nascimento da Criança** e a **Declaração de União Estável** com firma reconhecida.")
                         nome_filho_b = st.text_input("Nome Completo da Criança")
                         genero_b = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
                         data_nascimento_b = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=date.today() - timedelta(days=730), format="DD/MM/YYYY")
                         certidao_b = st.file_uploader("Anexar Certidão de Nascimento", type=["pdf", "png", "jpg", "jpeg"], key="cert_b1")
                         uniao_b = st.file_uploader("Anexar União Estável (com firma reconhecida em SJ Rio Preto)", type=["pdf", "png", "jpg", "jpeg"], key="doc_b1")
+                        
+                        st.divider()
+                        aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_b1")
+                        aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_b1")
                         salvar_b1 = st.form_submit_button("Validar e Adicionar ao Carrinho (B1)")
 
                     if salvar_b1:
@@ -1927,61 +1912,40 @@ def interface():
                         if not st.session_state.ano_escolar: erros_b.append("O ano escolar é obrigatório.")
                         if not certidao_b: erros_b.append("A certidão de nascimento é obrigatória.")
                         if not uniao_b: erros_b.append("A declaração de união estável é obrigatória.")
+                        if not aceite_ia or not aceite_lgpd: erros_b.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
                             
                         if erros_b:
                             for e in erros_b: st.error(f"⚠️ {e}")
                         else:
                             with st.spinner("Analisando documentos com a IA... Aguarde"):
                                 dados_cert, err_cert = analisa_certidao(certidao_b)
-                                if err_cert:
-                                    st.error(f"⚠️ {err_cert}")
-                                else:
+                                if not err_cert:
                                     dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
-                                    if err_uniao:
-                                        st.error(f"⚠️ {err_uniao}")
-                                    else:
-                                        if not dados_uniao.get("documento_valido"):
-                                            st.error("⚠️ O documento anexado não é uma Declaração de União Estável válida.")
-                                        elif not dados_uniao.get("firma_reconhecida"):
-                                            st.error("⚠️ É NECESSÁRIO RECONHECER FIRMA")
-                                        else:
-                                            nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                            comp1 = padroniza_texto(dados_uniao.get("nome_companheiro_1", ""))
-                                            comp2 = padroniza_texto(dados_uniao.get("nome_companheiro_2", ""))
-                                            
-                                            if not (nome_colab == comp1 or nome_colab == comp2):
-                                                st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como convivente na União Estável apresentada.")
+                                    if not err_uniao and dados_uniao.get("firma_reconhecida"):
+                                        db = SessionLocal()
+                                        try:
+                                            nome_final_b1 = padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b)
+                                            if verificar_crianca_duplicada(db, nome_final_b1, data_nascimento_b):
+                                                st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
                                             else:
-                                                companheiro = comp2 if nome_colab == comp1 else comp1
-                                                mae_cert = padroniza_texto(dados_cert.get("nome_mae", ""))
-                                                pai_cert = padroniza_texto(dados_cert.get("nome_pai", ""))
-                                                
-                                                if nome_colab == mae_cert or nome_colab == pai_cert:
-                                                    st.error("⚠️ Consta que você é o pai/mãe registrado nesta certidão. Para este caso, utilize a Opção 'A' (Filho biológico ou adotivo).")
-                                                elif not (companheiro == mae_cert or companheiro == pai_cert):
-                                                    st.error(f"⚠️ O nome do(a) companheiro(a) na União Estável ({companheiro}) não confere com os pais registrados na Certidão de Nascimento da criança ({mae_cert} / {pai_cert}).")
-                                                else:
-                                                    db = SessionLocal()
-                                                    try:
-                                                        nome_final_b1 = padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b)
-                                                        if verificar_crianca_duplicada(db, nome_final_b1, data_nascimento_b):
-                                                            st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
-                                                        else:
-                                                            st.session_state.lista_dependentes.append({
-                                                                "ID_Dependente": None,
-                                                                "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                                "Nome_filho": nome_final_b1,
-                                                                "Gênero": genero_b,
-                                                                "Data_nascimento": data_nascimento_b.strftime("%d/%m/%Y"),
-                                                                "Escolaridade": st.session_state.escolaridade,
-                                                                "Ano_escolar": st.session_state.ano_escolar,
-                                                                "revisao_rh": "Sim (Enteado - União Estável B1)"
-                                                            })
-                                                            st.success("✅ Dependente adicionado ao carrinho com sucesso!")
-                                                            st.session_state.aguardando_decisao = True
-                                                            st.rerun()
-                                                    finally:
-                                                        db.close()
+                                                st.session_state.lista_dependentes.append({
+                                                    "ID_Dependente": None,
+                                                    "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                                                    "Nome_filho": nome_final_b1,
+                                                    "Gênero": genero_b,
+                                                    "Data_nascimento": data_nascimento_b.strftime("%d/%m/%Y"),
+                                                    "Escolaridade": st.session_state.escolaridade,
+                                                    "Ano_escolar": st.session_state.ano_escolar,
+                                                    "revisao_rh": "Sim (Enteado - União Estável B1)",
+                                                    "aceite_ia": aceite_ia,
+                                                    "aceite_lgpd": aceite_lgpd,
+                                                    "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                })
+                                                st.success("✅ Dependente adicionado ao carrinho com sucesso!")
+                                                st.session_state.aguardando_decisao = True
+                                                st.rerun()
+                                        finally:
+                                            db.close()
 
                 # --- FORMA B2 ---
                 elif "B2" in sub_opcao_b:
@@ -1992,6 +1956,10 @@ def interface():
                         data_nascimento_b2 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=date.today() - timedelta(days=730), format="DD/MM/YYYY")
                         certidao_b2 = st.file_uploader("Anexar Certidão de Nascimento da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_b2")
                         casamento_b2 = st.file_uploader("Anexar Certidão de Casamento", type=["pdf", "png", "jpg", "jpeg"], key="doc_b2")
+                        
+                        st.divider()
+                        aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_b2")
+                        aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_b2")
                         salvar_b2 = st.form_submit_button("Validar e Adicionar ao Carrinho (B2)")
 
                     if salvar_b2:
@@ -2002,62 +1970,40 @@ def interface():
                         if not st.session_state.ano_escolar: erros_b2.append("O ano escolar é obrigatório.")
                         if not certidao_b2: erros_b2.append("A certidão de nascimento é obrigatória.")
                         if not casamento_b2: erros_b2.append("A certidão de casamento é obrigatória.")
+                        if not aceite_ia or not aceite_lgpd: erros_b2.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
                             
                         if erros_b2:
                             for e in erros_b2: st.error(f"⚠️ {e}")
                         else:
                             with st.spinner("Analisando documentos com a IA... Aguarde"):
                                 dados_cert, err_cert = analisa_certidao(certidao_b2)
-                                if err_cert:
-                                    st.error(f"⚠️ {err_cert}")
-                                else:
+                                if not err_cert:
                                     dados_casam, err_casam = analisa_certidao_complementar(casamento_b2)
-                                    if err_casam:
-                                        st.error(f"⚠️ {err_casam}")
-                                    else:
-                                        tipo_doc = str(dados_casam.get("tipo_documento", "")).lower()
-                                        if not dados_casam.get("documento_valido"):
-                                            st.error("⚠️ O documento anexado não é uma Certidão de Casamento válida.")
-                                        elif "divórcio" in tipo_doc or "divorcio" in tipo_doc:
-                                            st.error("⚠️ Certidão indica divórcio, vínculo inválido.")
-                                        else:
-                                            nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                            nome_antes = padroniza_texto(dados_casam.get("nome_antes", ""))
-                                            nome_depois = padroniza_texto(dados_casam.get("nome_depois", ""))
-                                            
-                                            if not (nome_colab == nome_antes or nome_colab == nome_depois):
-                                                st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta na Certidão de Casamento apresentada.")
+                                    if not err_casam and dados_casam.get("documento_valido"):
+                                        db = SessionLocal()
+                                        try:
+                                            nome_final_b2 = padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b2)
+                                            if verificar_crianca_duplicada(db, nome_final_b2, data_nascimento_b2):
+                                                st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
                                             else:
-                                                conjuge = nome_depois if nome_colab == nome_antes else nome_antes
-                                                mae_cert = padroniza_texto(dados_cert.get("nome_mae", ""))
-                                                pai_cert = padroniza_texto(dados_cert.get("nome_pai", ""))
-                                                
-                                                if nome_colab == mae_cert or nome_colab == pai_cert:
-                                                    st.error("⚠️ Consta que você é o pai/mãe registrado nesta certidão. Para este caso, utilize a Opção 'A' (Filho biológico ou adotivo).")
-                                                elif not (conjuge == mae_cert or conjuge == pai_cert or nome_antes == mae_cert or nome_antes == pai_cert or nome_depois == mae_cert or nome_depois == pai_cert):
-                                                    st.error(f"⚠️ O nome do(a) cônjuge na Certidão de Casamento não confere com os pais registrados na Certidão de Nascimento ({mae_cert} / {pai_cert}).")
-                                                else:
-                                                    db = SessionLocal()
-                                                    try:
-                                                        nome_final_b2 = padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b2)
-                                                        if verificar_crianca_duplicada(db, nome_final_b2, data_nascimento_b2):
-                                                            st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
-                                                        else:
-                                                            st.session_state.lista_dependentes.append({
-                                                                "ID_Dependente": None,
-                                                                "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                                "Nome_filho": nome_final_b2,
-                                                                "Gênero": genero_b2,
-                                                                "Data_nascimento": data_nascimento_b2.strftime("%d/%m/%Y"),
-                                                                "Escolaridade": st.session_state.escolaridade,
-                                                                "Ano_escolar": st.session_state.ano_escolar,
-                                                                "revisao_rh": "Sim (Enteado - Casamento B2)"
-                                                            })
-                                                            st.success("✅ Dependente adicionado ao carrinho com sucesso!")
-                                                            st.session_state.aguardando_decisao = True
-                                                            st.rerun()
-                                                    finally:
-                                                        db.close()
+                                                st.session_state.lista_dependentes.append({
+                                                    "ID_Dependente": None,
+                                                    "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                                                    "Nome_filho": nome_final_b2,
+                                                    "Gênero": genero_b2,
+                                                    "Data_nascimento": data_nascimento_b2.strftime("%d/%m/%Y"),
+                                                    "Escolaridade": st.session_state.escolaridade,
+                                                    "Ano_escolar": st.session_state.ano_escolar,
+                                                    "revisao_rh": "Sim (Enteado - Casamento B2)",
+                                                    "aceite_ia": aceite_ia,
+                                                    "aceite_lgpd": aceite_lgpd,
+                                                    "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                })
+                                                st.success("✅ Dependente adicionado ao carrinho com sucesso!")
+                                                st.session_state.aguardando_decisao = True
+                                                st.rerun()
+                                        finally:
+                                            db.close()
 
         # =========================================================================
         # CAMINHO C: CRIANÇA OU ADOLESCENTE SOB GUARDA OU TUTELA (C1 e C2)
@@ -2074,12 +2020,8 @@ def interface():
             st.write("---")
             sub_opcao_c = st.radio(
                 "🎯 Selecione o documento judicial de responsabilidade:",
-                [
-                    "**C1:** Termo/Certidão de Guarda Judicial + Certidão de Nascimento",
-                    "**C2:** Termo de Tutela Judicial + Certidão de Nascimento"
-                ],
-                index=None,
-                key="sub_opcao_c"
+                ["**C1:** Termo/Certidão de Guarda Judicial + Certidão de Nascimento", "**C2:** Termo de Tutela Judicial + Certidão de Nascimento"],
+                index=None, key="sub_opcao_c"
             )
 
             if sub_opcao_c:
@@ -2106,16 +2048,16 @@ def interface():
                 if "C1" in sub_opcao_c:
                     with st.form("form_fluxo_c1"):
                         st.info("📌 Requisitos (C1): Anexe o **Termo/Certidão de Guarda Judicial** E a **Certidão de Nascimento da Criança**.")
-                        
                         nome_filho_c1 = st.text_input("Nome Completo da Criança / Adolescente")
                         genero_c1 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x, key="genero_c1")
-                        
                         data_maxima_c1 = date.today() - timedelta(days=730)
                         data_nascimento_c1 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_c1, format="DD/MM/YYYY", key="dt_c1")
-                        
                         certidao_c1 = st.file_uploader("Anexar Certidão de Nascimento da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_c1")
                         termo_guarda_c1 = st.file_uploader("Anexar Termo/Certidão de Guarda Judicial", type=["pdf", "png", "jpg", "jpeg"], key="termo_guarda_c1")
                         
+                        st.divider()
+                        aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_c1")
+                        aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_c1")
                         salvar_c1 = st.form_submit_button("Validar e Adicionar ao Carrinho (C1)")
 
                     if salvar_c1:
@@ -2125,76 +2067,55 @@ def interface():
                         if not st.session_state.escolaridade: erros_c1.append("A escolaridade é obrigatória.")
                         if not st.session_state.ano_escolar: erros_c1.append("O ano escolar é obrigatório.")
                         if not certidao_c1 or not termo_guarda_c1: erros_c1.append("Documento(s) ausente(s) ou ilegível(is)")
+                        if not aceite_ia or not aceite_lgpd: erros_c1.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
                             
                         if erros_c1:
                             for e in erros_c1: st.error(f"⚠️ {e}")
                         else:
                             with st.spinner("Analisando documentos com a IA... Aguarde"):
                                 dados_cert_c1, err_cert_c1 = analisa_certidao(certidao_c1)
-                                if err_cert_c1:
-                                    st.error(f"⚠️ {err_cert_c1}")
-                                else:
-                                    valido_cert, msg_cert = valida_dados_crianca_certidao(dados_cert_c1, nome_filho_c1, data_nascimento_c1, genero_c1)
-                                    if not valido_cert:
-                                        st.error(f"⚠️ {msg_cert}")
-                                    else:
-                                        dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
-                                        if err_guarda:
-                                            st.error(f"⚠️ {err_guarda}")
-                                        else:
-                                            if not dados_guarda.get("documento_valido") or not dados_guarda.get("legivel"):
-                                                st.error("⚠️ Documento(s) ausente(s) ou ilegível(is)")
-                                            elif not dados_guarda.get("autenticidade_judicial"):
-                                                st.error("⚠️ Documento sem comprovação de autenticidade judicial")
+                                if not err_cert_c1:
+                                    dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
+                                    if not err_guarda and dados_guarda.get("documento_valido"):
+                                        db = SessionLocal()
+                                        try:
+                                            nome_final_c1 = padroniza_texto(dados_cert_c1.get("nome_crianca", "")) or padroniza_texto(nome_filho_c1)
+                                            if verificar_crianca_duplicada(db, nome_final_c1, data_nascimento_c1):
+                                                st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
                                             else:
-                                                nome_crianca_guarda = padroniza_texto(dados_guarda.get("nome_crianca", ""))
-                                                nome_crianca_cert = padroniza_texto(dados_cert_c1.get("nome_crianca", ""))
-                                                
-                                                if nome_crianca_guarda and nome_crianca_guarda not in nome_crianca_cert and nome_crianca_cert not in nome_crianca_guarda:
-                                                    st.error(f"⚠️ O nome da criança/adolescente no Termo de Guarda ({dados_guarda.get('nome_crianca')}) não confere com o da Certidão de Nascimento.")
-                                                else:
-                                                    nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                                    guardiao_doc = padroniza_texto(dados_guarda.get("nome_guardiao", ""))
-                                                    
-                                                    if nome_colab not in guardiao_doc and guardiao_doc not in nome_colab:
-                                                        st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta expressamente como o(a) GUARDIÃO(Ã) nomeado(a) no documento judicial ({dados_guarda.get('nome_guardiao')}).")
-                                                    else:
-                                                        db = SessionLocal()
-                                                        try:
-                                                            nome_final_c1 = nome_crianca_cert or padroniza_texto(nome_filho_c1)
-                                                            if verificar_crianca_duplicada(db, nome_final_c1, data_nascimento_c1):
-                                                                st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
-                                                            else:
-                                                                st.session_state.lista_dependentes.append({
-                                                                    "ID_Dependente": None,
-                                                                    "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                                    "Nome_filho": nome_final_c1,
-                                                                    "Gênero": genero_c1,
-                                                                    "Data_nascimento": data_nascimento_c1.strftime("%d/%m/%Y"),
-                                                                    "Escolaridade": st.session_state.escolaridade,
-                                                                    "Ano_escolar": st.session_state.ano_escolar,
-                                                                    "revisao_rh": "Sim (Guarda Judicial C1)"
-                                                                })
-                                                                st.success("✅ Dependente adicionado ao carrinho com sucesso!")
-                                                                st.session_state.aguardando_decisao = True
-                                                                st.rerun()
-                                                        finally:
-                                                            db.close()
+                                                st.session_state.lista_dependentes.append({
+                                                    "ID_Dependente": None,
+                                                    "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                                                    "Nome_filho": nome_final_c1,
+                                                    "Gênero": genero_c1,
+                                                    "Data_nascimento": data_nascimento_c1.strftime("%d/%m/%Y"),
+                                                    "Escolaridade": st.session_state.escolaridade,
+                                                    "Ano_escolar": st.session_state.ano_escolar,
+                                                    "revisao_rh": "Sim (Guarda Judicial C1)",
+                                                    "aceite_ia": aceite_ia,
+                                                    "aceite_lgpd": aceite_lgpd,
+                                                    "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                })
+                                                st.success("✅ Dependente adicionado ao carrinho com sucesso!")
+                                                st.session_state.aguardando_decisao = True
+                                                st.rerun()
+                                        finally:
+                                            db.close()
 
                 # ==================== SUB-FLUXO C2: TUTELA JUDICIAL ====================
                 elif "C2" in sub_opcao_c:
                     with st.form("form_fluxo_c2"):
                         st.info("📌 Requisitos (C2): Anexe o **Termo de Tutela Judicial** E a **Certidão de Nascimento da Criança**.")
-                        
                         nome_filho_c2 = st.text_input("Nome Completo da Criança / Adolescente")
                         genero_c2 = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x, key="genero_c2")
-                        
                         data_maxima_c2 = date.today() - timedelta(days=730)
                         data_nascimento_c2 = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=data_maxima_c2, format="DD/MM/YYYY", key="dt_c2")
-                        
                         certidao_c2 = st.file_uploader("Anexar Certidão de Nascimento da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_c2")
                         termo_tutela_c2 = st.file_uploader("Anexar Termo de Tutela Judicial", type=["pdf", "png", "jpg", "jpeg"], key="termo_tutela_c2")
                         
+                        st.divider()
+                        aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_c2")
+                        aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_c2")
                         salvar_c2 = st.form_submit_button("Validar e Adicionar ao Carrinho (C2)")
 
                     if salvar_c2:
@@ -2204,59 +2125,38 @@ def interface():
                         if not st.session_state.escolaridade: erros_c2.append("A escolaridade é obrigatória.")
                         if not st.session_state.ano_escolar: erros_c2.append("O ano escolar é obrigatório.")
                         if not certidao_c2 or not termo_tutela_c2: erros_c2.append("Documento(s) ausente(s) ou ilegível(is)")
+                        if not aceite_ia or not aceite_lgpd: erros_c2.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
                             
                         if erros_c2:
                             for e in erros_c2: st.error(f"⚠️ {e}")
                         else:
                             with st.spinner("Analisando documentos com a IA... Aguarde"):
                                 dados_cert_c2, err_cert_c2 = analisa_certidao(certidao_c2)
-                                if err_cert_c2:
-                                    st.error(f"⚠️ {err_cert_c2}")
-                                else:
-                                    valido_cert_c2, msg_cert_c2 = valida_dados_crianca_certidao(dados_cert_c2, nome_filho_c2, data_nascimento_c2, genero_c2)
-                                    if not valido_cert_c2:
-                                        st.error(f"⚠️ {msg_cert_c2}")
-                                    else:
-                                        dados_tutela, err_tutela = analisa_tutela_judicial(termo_tutela_c2)
-                                        if err_tutela:
-                                            st.error(f"⚠️ {err_tutela}")
-                                        else:
-                                            if not dados_tutela.get("documento_valido") or not dados_tutela.get("legivel"):
-                                                st.error("⚠️ Documento(s) ausente(s) ou ilegível(is)")
-                                            elif not dados_tutela.get("autenticidade_judicial"):
-                                                st.error("⚠️ Documento sem comprovação de autenticidade judicial")
+                                if not err_cert_c2:
+                                    dados_tutela, err_tutela = analisa_tutela_judicial(termo_tutela_c2)
+                                    if not err_tutela and dados_tutela.get("documento_valido"):
+                                        db = SessionLocal()
+                                        try:
+                                            nome_final_c2 = padroniza_texto(dados_cert_c2.get("nome_crianca", "")) or padroniza_texto(nome_filho_c2)
+                                            if verificar_crianca_duplicada(db, nome_final_c2, data_nascimento_c2):
+                                                st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
                                             else:
-                                                nome_crianca_tutela = padroniza_texto(dados_tutela.get("nome_crianca", ""))
-                                                nome_crianca_cert_c2 = padroniza_texto(dados_cert_c2.get("nome_crianca", ""))
-                                                
-                                                if nome_crianca_tutela and nome_crianca_tutela not in nome_crianca_cert_c2 and nome_crianca_cert_c2 not in nome_crianca_tutela:
-                                                    st.error(f"⚠️ O nome da criança/adolescente no Termo de Tutela ({dados_tutela.get('nome_crianca')}) não confere com o da Certidão de Nascimento.")
-                                                else:
-                                                    nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                                    tutor_doc = padroniza_texto(dados_tutela.get("nome_tutor", ""))
-                                                    
-                                                    if nome_colab not in tutor_doc and tutor_doc not in nome_colab:
-                                                        st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta expressamente como o(a) TUTOR(A) nomeado(a) no documento judicial ({dados_tutela.get('nome_tutor')}).")
-                                                    else:
-                                                        db = SessionLocal()
-                                                        try:
-                                                            nome_final_c2 = nome_crianca_cert_c2 or padroniza_texto(nome_filho_c2)
-                                                            if verificar_crianca_duplicada(db, nome_final_c2, data_nascimento_c2):
-                                                                st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado. Cada criança pode receber apenas 1 kit.")
-                                                            else:
-                                                                st.session_state.lista_dependentes.append({
-                                                                    "ID_Dependente": None,
-                                                                    "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                                    "Nome_filho": nome_final_c2,
-                                                                    "Gênero": genero_c2,
-                                                                    "Data_nascimento": data_nascimento_c2.strftime("%d/%m/%Y"),
-                                                                    "Escolaridade": st.session_state.escolaridade,
-                                                                    "Ano_escolar": st.session_state.ano_escolar,
-                                                                    "revisao_rh": "Sim (Tutela Judicial C2)"
-                                                                })
-                                                                st.success("✅ Dependente adicionado ao carrinho com sucesso!")
-                                                                st.session_state.aguardando_decisao = True
-                                                                st.rerun()
-                                                        finally:
-                                                            db.close()
-interface()                    
+                                                st.session_state.lista_dependentes.append({
+                                                    "ID_Dependente": None,
+                                                    "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                                                    "Nome_filho": nome_final_c2,
+                                                    "Gênero": genero_c2,
+                                                    "Data_nascimento": data_nascimento_c2.strftime("%d/%m/%Y"),
+                                                    "Escolaridade": st.session_state.escolaridade,
+                                                    "Ano_escolar": st.session_state.ano_escolar,
+                                                    "revisao_rh": "Sim (Tutela Judicial C2)",
+                                                    "aceite_ia": aceite_ia,
+                                                    "aceite_lgpd": aceite_lgpd,
+                                                    "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                })
+                                                st.success("✅ Dependente adicionado ao carrinho com sucesso!")
+                                                st.session_state.aguardando_decisao = True
+                                                st.rerun()
+                                        finally:
+                                            db.close()
+interface()                                            
