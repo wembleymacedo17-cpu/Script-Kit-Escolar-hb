@@ -723,6 +723,7 @@ def editar_kits_existentes(id_colaborador):
             </style>
         """, unsafe_allow_html=True)
 
+        info_dependentes = []
         with st.form("form_edicao_kits"):
             for dep in dependentes:
                 st.markdown(f"### 👦/👧 {dep.nome_filho}")
@@ -732,11 +733,10 @@ def editar_kits_existentes(id_colaborador):
                 kit_atual = escolha_atual.kit_escolhido if escolha_atual else ""
 
                 opcoes_kits = catalogo.get(dep.escolaridade, [])
-                index_atual = opcoes_kits.index(kit_atual) if kit_atual in opcoes_kits else 0
 
-                # Vitrine visual de kits
+                # Vitrine visual de kits — 1 checkbox por imagem
                 if opcoes_kits:
-                    st.markdown("**Catálogo Disponível:**")
+                    st.markdown("**Catálogo Disponível — marque o kit desejado:**")
                     itens_por_linha = 4
                     for i in range(0, len(opcoes_kits), itens_por_linha):
                         colunas = st.columns(itens_por_linha)
@@ -747,25 +747,53 @@ def editar_kits_existentes(id_colaborador):
                                 url_img = f"{base_url}{nome_arquivo}.png"
                                 with colunas[j]:
                                     st.image(url_img, caption=nome_kit, width='stretch')
+                                    st.checkbox(
+                                        nome_kit,
+                                        value=(nome_kit == kit_atual),
+                                        key=f"edit_chk_kit_{dep.id_dependente}_{nome_kit}"
+                                    )
 
                 st.write("---")
 
-                st.selectbox(
-                    f"Alterar kit de {dep.nome_filho}:",
-                    opcoes_kits,
-                    index=index_atual,
-                    key=f"edit_kit_{dep.id_dependente}"
-                )
-                st.markdown("---")
+                info_dependentes.append({
+                    "id_dependente": dep.id_dependente,
+                    "nome_filho": dep.nome_filho,
+                    "escolaridade": dep.escolaridade,
+                    "opcoes_kits": opcoes_kits
+                })
 
             salvar_edicao = st.form_submit_button("💾 Salvar Alterações de Kit")
 
         if salvar_edicao:
+            # Apura, para cada dependente, qual(is) checkbox(es) ficaram marcados
+            erros = []
+            selecoes = {}
+            for info in info_dependentes:
+                id_dependente = info["id_dependente"]
+                marcados = [
+                    nome_kit for nome_kit in info["opcoes_kits"]
+                    if st.session_state.get(f"edit_chk_kit_{id_dependente}_{nome_kit}")
+                ]
+
+                if len(marcados) == 0:
+                    erros.append(f"⚠️ Selecione um kit para {info['nome_filho']}.")
+                    continue
+                if len(marcados) > 1:
+                    erros.append(f"⚠️ Selecione apenas um kit para {info['nome_filho']} (mais de um foi marcado).")
+                    continue
+
+                selecoes[id_dependente] = marcados[0]
+
+            if erros:
+                for erro in erros:
+                    st.error(erro)
+                return
+
             houve_alteracao = False
             resumo_novos_kits = []
-            
+
             for dep in dependentes:
-                novo_kit_selecionado = st.session_state[f"edit_kit_{dep.id_dependente}"]
+                novo_kit_selecionado = selecoes[dep.id_dependente]
                 escolha_db = db.query(EscolhaKit).filter(EscolhaKit.id_dependente == dep.id_dependente).first()
                 
                 if escolha_db:
@@ -802,7 +830,6 @@ def editar_kits_existentes(id_colaborador):
     finally:
         db.close()
 
-       
 def verificar_crianca_duplicada(db, nome_filho, data_nascimento):
     if not nome_filho:
         return False
@@ -1259,7 +1286,59 @@ def escolher_kits_colaborador():
     st.divider()
     st.subheader("🎒 Escolha dos Kits Escolares")
     id_colaborador = st.session_state.colaborador["id"]   # ID real do banco
-    
+
+    # ===================== ETAPA 2: CIÊNCIA SOBRE VARIAÇÃO DE MODELO/ESTOQUE =====================
+    if st.session_state.aguardando_ciencia_kits:
+        st.warning(
+            "As mochilas apresentadas possuem variações de cores e, em alguns casos, "
+            "diferentes opções de acabamento.\n\n"
+            "A distribuição estará condicionada ao estoque disponível na data de entrega. "
+            "Caso o modelo escolhido não esteja disponível, será fornecida outra opção disponível."
+        )
+
+        ciente = st.checkbox("Estou ciente", key="chk_ciencia_variacao_kit")
+        confirmar_ciencia = st.button("✅ Confirmar Ciência e Finalizar Escolha", key="btn_confirma_ciencia_kit")
+
+        if confirmar_ciencia:
+            if not ciente:
+                st.error("⚠️ Você precisa marcar 'Estou ciente' para prosseguir.")
+                return None
+
+            db = SessionLocal()
+            try:
+                data_aceite = datetime.now()
+                novas_escolhas = []
+                for escolha in st.session_state.escolhas_pendentes_kits:
+                    nova_escolha = EscolhaKit(
+                        id_colaborador=escolha["ID_Colaborador"],
+                        id_dependente=escolha["ID_Dependente"],
+                        kit_escolhido=escolha["Kit_Escolhido"],
+                        aceite_variacao_kit=True,          # 🚨 requer coluna nova em EscolhaKit
+                        data_aceite_variacao=data_aceite    # 🚨 requer coluna nova em EscolhaKit
+                    )
+                    db.add(nova_escolha)
+                    db.commit()
+                    db.refresh(nova_escolha)
+                    novas_escolhas.append({
+                        "ID_Escolha": nova_escolha.id_escolha,
+                        "ID_Dependente": nova_escolha.id_dependente,
+                        "Kit_Escolhido": nova_escolha.kit_escolhido,
+                        "Nome_filho": escolha["Nome_filho"],
+                        "Escolaridade": escolha["Escolaridade"],
+                        "Ano_escolar": escolha["Ano_escolar"]
+                    })
+
+                st.session_state.escolhas_kits = novas_escolhas
+                st.session_state.aguardando_ciencia_kits = False
+                st.session_state.escolhas_pendentes_kits = []
+                st.success("🎉 Kits escolhidos com sucesso!")
+                return novas_escolhas
+            finally:
+                db.close()
+
+        return None
+
+    # ===================== ETAPA 1: SELEÇÃO DOS KITS (CHECKBOX POR IMAGEM) =====================
     db = SessionLocal()
     try:
         # Busca dependentes deste colaborador diretamente do banco
@@ -1272,7 +1351,6 @@ def escolher_kits_colaborador():
             return None
             
         catalogo, base_url = catalogo_kits_por_escolaridade()
-        escolhas = []
         st.write(f"Você possui {len(dependentes_colaborador)} crédito(s) de kit.")
         
         # INJEÇÃO DO CSS PARA PADRONIZAR A ALTURA DAS IMAGENS
@@ -1284,7 +1362,8 @@ def escolher_kits_colaborador():
             }
             </style>
         """, unsafe_allow_html=True)
-        
+
+        info_dependentes = []
         with st.form("form_escolha_kits"):
             for dependente in dependentes_colaborador:
                 nome_filho = dependente.nome_filho
@@ -1302,9 +1381,9 @@ def escolher_kits_colaborador():
                     continue
                 
                 # ========================================================
-                # VITRINE VISUAL DE KITS (Exibição lado a lado)
+                # VITRINE VISUAL DE KITS — 1 CHECKBOX POR IMAGEM
                 # ========================================================
-                st.markdown(f"**Catálogo Disponível:**")
+                st.markdown("**Catálogo Disponível — marque o kit desejado:**")
                 
                 itens_por_linha = 4
                 for i in range(0, len(opcoes_kits), itens_por_linha):
@@ -1317,62 +1396,63 @@ def escolher_kits_colaborador():
                             
                             with colunas[j]:
                                 st.image(url_img, caption=nome_kit, width='stretch')
+                                st.checkbox(nome_kit, key=f"chk_kit_{id_dependente}_{nome_kit}")
                 
                 st.write("---")
                 # ========================================================
 
-                kit_escolhido = st.selectbox(
-                    f"Confirme o kit desejado para {nome_filho}:",
-                    [""] + opcoes_kits,
-                    format_func=lambda x: "Selecione um kit..." if x == "" else x,
-                    key=f"kit_dependente_{id_dependente}"
-                )
-
-                escolhas.append({
+                info_dependentes.append({
                     "ID_Dependente": id_dependente,
                     "ID_Colaborador": id_colaborador,
                     "Nome_filho": nome_filho,
                     "Gênero": genero,
                     "Escolaridade": escolaridade,
                     "Ano_escolar": ano_escolar,
-                    "Kit_Escolhido": kit_escolhido
+                    "Opcoes_kits": opcoes_kits
                 })
                 
             salvar_escolhas = st.form_submit_button("✅ Confirmar escolha dos kits")
             
         if not salvar_escolhas:
             return None
-            
-        # Validação de seleção
-        erros = [f"⚠️ Selecione um kit para {e['Nome_filho']}." for e in escolhas if not e["Kit_Escolhido"]]
+
+        # Apura, para cada dependente, qual(is) checkbox(es) ficaram marcados
+        escolhas = []
+        erros = []
+        for info in info_dependentes:
+            id_dependente = info["ID_Dependente"]
+            marcados = [
+                nome_kit for nome_kit in info["Opcoes_kits"]
+                if st.session_state.get(f"chk_kit_{id_dependente}_{nome_kit}")
+            ]
+
+            if len(marcados) == 0:
+                erros.append(f"⚠️ Selecione um kit para {info['Nome_filho']}.")
+                continue
+            if len(marcados) > 1:
+                erros.append(f"⚠️ Selecione apenas um kit para {info['Nome_filho']} (mais de um foi marcado).")
+                continue
+
+            escolhas.append({
+                "ID_Dependente": id_dependente,
+                "ID_Colaborador": info["ID_Colaborador"],
+                "Nome_filho": info["Nome_filho"],
+                "Gênero": info["Gênero"],
+                "Escolaridade": info["Escolaridade"],
+                "Ano_escolar": info["Ano_escolar"],
+                "Kit_Escolhido": marcados[0]
+            })
+
         if erros:
             for erro in erros:
                 st.error(erro)
             return None
-            
-        # ==================== SALVAR ESCOLHAS NO BANCO ====================
-        novas_escolhas = []
-        for escolha in escolhas:
-            nova_escolha = EscolhaKit(
-                id_colaborador=escolha["ID_Colaborador"],
-                id_dependente=escolha["ID_Dependente"],
-                kit_escolhido=escolha["Kit_Escolhido"]
-            )
-            db.add(nova_escolha)
-            db.commit()
-            db.refresh(nova_escolha)
-            novas_escolhas.append({
-                "ID_Escolha": nova_escolha.id_escolha,
-                "ID_Dependente": nova_escolha.id_dependente,
-                "Kit_Escolhido": nova_escolha.kit_escolhido,
-                "Nome_filho": escolha["Nome_filho"],
-                "Escolaridade": escolha["Escolaridade"],
-                "Ano_escolar": escolha["Ano_escolar"]
-            })
-            
-        st.session_state.escolhas_kits = novas_escolhas
-        st.success("🎉 Kits escolhidos com sucesso!")
-        return novas_escolhas
+
+        # Guarda as escolhas e avança para a etapa de ciência (Etapa 2)
+        st.session_state.escolhas_pendentes_kits = escolhas
+        st.session_state.aguardando_ciencia_kits = True
+        st.rerun()
+
     finally:
         db.close()
 
@@ -1524,6 +1604,10 @@ def interface():
         st.session_state.escolhendo_kits = False
     if 'escolhas_kits' not in st.session_state:
         st.session_state.escolhas_kits = []
+    if 'aguardando_ciencia_kits' not in st.session_state:
+        st.session_state.aguardando_ciencia_kits = False
+    if 'escolhas_pendentes_kits' not in st.session_state:
+        st.session_state.escolhas_pendentes_kits = []
 
     # ===================== CARRINHO VISUAL NA SIDEBAR =====================
     if st.session_state.contato is not None and not st.session_state.cadastro_finalizado:

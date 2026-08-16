@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean
 from sqlalchemy.engine import URL
@@ -39,7 +39,7 @@ class Colaborador(Base):
     descricao_situacao = Column(Text)
     titulo_reduzido_cargo = Column(Text)
     data_demissao = Column(Date)
-    criado_em = Column(DateTime, default=datetime.utcnow)
+    criado_em = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     situacao = Column(Integer)
 
     dependentes = relationship("Dependente", back_populates="colaborador", cascade="all, delete-orphan")
@@ -54,7 +54,7 @@ class Dependente(Base):
     genero = Column(String(50))
     escolaridade = Column(String(100))
     ano_escola = Column(String(50))
-    data_cadastro = Column(DateTime, default=datetime.utcnow)
+    data_cadastro = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     revisao_rh = Column(String(50))
 
     # 🔒 NOVAS COLUNAS DE COMPLIANCE
@@ -75,7 +75,11 @@ class EscolhaKit(Base):
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
     id_dependente = Column(Integer, ForeignKey("dependentes.id_dependente", ondelete="CASCADE"), nullable=False)
     kit_escolhido = Column(String(150), nullable=False)
-    data_escolha = Column(DateTime, default=datetime.utcnow)
+    data_escolha = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    # 🚨 NOVAS COLUNAS: ciência sobre variação de cor/acabamento e estoque do kit
+    aceite_variacao_kit = Column(Boolean, default=False)
+    data_aceite_variacao = Column(DateTime, nullable=True)
 
     dependente = relationship("Dependente", back_populates="escolha")
 
@@ -92,7 +96,7 @@ class Retirada(Base):
     qtd_kits = Column(Integer, nullable=False)
     resumo_kits = Column(Text)
     status = Column(String(20), default='PENDENTE', nullable=False)
-    data_geracao = Column(DateTime, default=datetime.utcnow)
+    data_geracao = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     data_entrega = Column(DateTime)
 
     __table_args__ = (CheckConstraint("status IN ('PENDENTE', 'ENTREGUE')", name='chk_status_retirada'),)
