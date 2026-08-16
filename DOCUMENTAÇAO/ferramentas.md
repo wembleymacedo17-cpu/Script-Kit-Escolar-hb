@@ -34,10 +34,12 @@ streamlit run "C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar.py
 uvicorn api_baixas:app --reload - carregar api
 cd C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar
 
-cd "C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar" ; streamlit run kit-colaborador.py
+cd "C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar" ; v
 
-
+streamlit run kit-colaborador.py
 streamlit run sistema.py
+
+gemini-1.5-flash
 
 
 
