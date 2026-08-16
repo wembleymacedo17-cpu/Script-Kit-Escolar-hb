@@ -631,7 +631,6 @@ def adicionar_dependentes():
         erros.append("❌ Ano Escolar é obrigatório.")
     if not certidao:
         erros.append("❌ Certidão de nascimento é obrigatória.")
-    # 🛑 NOVA REGRA DE VALIDAÇÃO
     if not aceite_ia or not aceite_lgpd:
         erros.append("❌ Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
 
@@ -640,25 +639,14 @@ def adicionar_dependentes():
             st.error(x)
         return None
 
-    # ===================== CHECAGEM DE DUPLICIDADE (Carrinho + Banco) =====================
-    nome_padronizado = padroniza_texto(nome_filho).strip()
     db = SessionLocal()
     try:
+        # 1. Validação cruzada de duplicidade (Carrinho + Banco)
         if verificar_crianca_duplicada(db, nome_filho, data_nascimento):
             st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
             return None
 
-        # 2. Verifica no banco de dados oficial
-        duplicado = db.query(Dependente).filter(
-            Dependente.nome_filho.ilike(f"%{nome_padronizado}%"),
-            Dependente.data_nascimento == data_nascimento
-        ).first()
-
-        if duplicado:
-            st.error("❌ Esta criança já possui um kit cadastrado.")
-            return None
-
-        # Análise da certidão com Gemini
+        # 2. Análise da certidão com Gemini
         with st.spinner("🔍 Analisando certidão de nascimento, aguarde..."):
             dados_certidao, erro_api = analisa_certidao(certidao)
         
@@ -666,39 +654,40 @@ def adicionar_dependentes():
             st.error(erro_api)
             return None
 
-        # TRATAMENTO PARA DOCUMENTO ILEGÍVEL OU INVÁLIDO
+        # 3. Tratamento para documento ilegível ou inválido
         if not dados_certidao.get("legivel", True) or not dados_certidao.get("documento_valido", True):
             st.error("❌ Documento ilegível, mande outro arquivo")
             return None
 
-        # Validações dos dados da criança na certidão
+        # 4. Validações dos dados da criança na certidão
         dados_ok, msg_dados = valida_dados_crianca_certidao(dados_certidao, nome_filho, data_nascimento, genero)
         if not dados_ok:
             st.error(msg_dados)
             return None
 
+        # 5. VALIDAÇÃO RÍGIDA DO NOME DOS PAIS (BLOQUEIO OBRIGATÓRIO SE NÃO BATER)
         valido, mensagem = valida_nome_pais_certidao(
             dados_certidao, st.session_state.colaborador['Nome']
         )
 
-        if valido:
-            st.success(mensagem)
+        if not valido:
+            st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como pai/mãe na certidão de nascimento enviada.")
+            return None
         else:
-            st.info("ℹ️ Vínculo requer conferência, mas o item foi adicionado ao carrinho para validação posterior.")
+            st.success(mensagem)
 
         # Retorna o dicionário para ser inserido puramente no carrinho (Session State)
         nome_final = padroniza_texto(dados_certidao.get("nome_crianca") or nome_filho)
         return {
-            "ID_Dependente": None, # Será gerado ao finalizar o carrinho no banco
+            "ID_Dependente": None,
             "ID_Colaborador": st.session_state.colaborador['Crachá'],
             "Nome_filho": nome_final,
             "Gênero": genero,
             "Data_nascimento": data_nascimento.strftime("%d/%m/%Y"),
             "Escolaridade": st.session_state.escolaridade,
             "Ano_escolar": st.session_state.ano_escolar,
-            "Data_Cadastro": datetime.now().strftime("%d/%m/%Y %H:%M"),
-            "revisao_rh": "Sim" if not valido else False,
-            # 🔒 ADICIONANDO OS DADOS DE COMPLIANCE NO RETORNO
+            "revisao_rh": "Não",
+            "Fluxo_Documento": "A1 - Certidão de Nascimento (Filho Biológico)",
             "aceite_ia": aceite_ia,
             "aceite_lgpd": aceite_lgpd,
             "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1564,6 +1553,8 @@ def interface():
                                     escolaridade=dep["Escolaridade"],
                                     ano_escola=dep["Ano_escolar"],
                                     revisao_rh=dep.get("revisao_rh"),
+                                    # 🚨 SALVANDO O FLUXO E DOCUMENTO NO BANCO DE DADOS
+                                    fluxo_documento=dep.get("Fluxo_Documento", "Não identificado"),
                                     # 🔒 GRAVANDO COMPLIANCE NO BANCO
                                     aceite_ia=dep.get("aceite_ia", False),
                                     aceite_lgpd=dep.get("aceite_lgpd", False),
@@ -1591,21 +1582,22 @@ def interface():
             st.session_state.colaborador = colaborador
 
         if st.session_state.colaborador is not None:
-            # 🚨 CHECAGEM IMEDIATA DE DEPENDENTES LOGO APÓS INSERIR O CRACHÁ 🚨
-            db = SessionLocal()
-            try:
-                dependentes_existentes = db.query(Dependente).filter(
-                    Dependente.id_colaborador == st.session_state.colaborador['id']
-                ).all()
-                
-                if dependentes_existentes:
-                    st.warning("⚠️ Teu crachá já tem dependentes atrelados a ele.")
-                    editar_kits_existentes(st.session_state.colaborador['id'])
-                    return  # Bloqueia a solicitação de contato e a criação de novos fluxos
-            finally:
-                db.close()
+            
+            # 🚨 TRAVA INTELIGENTE (BYPASS PARA QUEM ESTÁ CADASTRANDO) 🚨
+            if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
+                db = SessionLocal()
+                try:
+                    dependentes_existentes = db.query(Dependente).filter(
+                        Dependente.id_colaborador == st.session_state.colaborador['id']
+                    ).all()
+                    
+                    if dependentes_existentes and len(st.session_state.lista_dependentes) == 0:
+                        st.warning("⚠️ Teu crachá já tem dependentes atrelados a ele.")
+                        editar_kits_existentes(st.session_state.colaborador['id'])
+                        return  
+                finally:
+                    db.close()
 
-            # Se NÃO houver dependentes cadastrados, solicita os dados de contato
             contato = adiciona_dados_contato()
             if contato is not None:
                 st.session_state.contato = contato
@@ -1616,17 +1608,17 @@ def interface():
         st.success(f"👤 Colaborador: {st.session_state.colaborador['Nome']} | ✅ Contato salvo.")
 
         # 🚨 TRAVA DE VERIFICAÇÃO DE CADASTRO EXISTENTE 🚨
-        db = SessionLocal()
-        try:
-            dependentes_existentes = db.query(Dependente).filter(Dependente.id_colaborador == st.session_state.colaborador['id']).all()
-            if dependentes_existentes:
-                st.warning("⚠️ O seu crachá já tem dependentes atrelados a ele!")
-                editar_kits_existentes(st.session_state.colaborador['id'])
-                return  
-        finally:
-            db.close()
+        if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
+            db = SessionLocal()
+            try:
+                dependentes_existentes = db.query(Dependente).filter(Dependente.id_colaborador == st.session_state.colaborador['id']).all()
+                if dependentes_existentes:
+                    st.warning("⚠️ O seu crachá já tem dependentes atrelados a ele!")
+                    editar_kits_existentes(st.session_state.colaborador['id'])
+                    return  
+            finally:
+                db.close()
 
-        # 💡 ALERTA VISUAL PARA DISPOSITIVOS MÓVEIS (CELULAR)
         if st.session_state.lista_dependentes:
             qtd_itens = len(st.session_state.lista_dependentes)
             st.warning(
@@ -1687,6 +1679,8 @@ def interface():
                                     escolaridade=dep["Escolaridade"],
                                     ano_escola=dep["Ano_escolar"],
                                     revisao_rh=dep.get("revisao_rh"),
+                                    # 🚨 SALVANDO O FLUXO E DOCUMENTO NO BANCO DE DADOS
+                                    fluxo_documento=dep.get("Fluxo_Documento", "Não identificado"),
                                     # 🔒 GRAVANDO COMPLIANCE NO BANCO
                                     aceite_ia=dep.get("aceite_ia", False),
                                     aceite_lgpd=dep.get("aceite_lgpd", False),
@@ -1764,7 +1758,6 @@ def interface():
                         if err_cert:
                             st.error(f"⚠️ {err_cert}")
                         else:
-                            # VALIDAÇÃO RIGOROSA: Cruza os dados do estagiário com a certidão
                             dados_ok, msg_dados = valida_dados_crianca_certidao(
                                 dados_cert, st.session_state.colaborador['Nome'], data_nascimento_est, genero_est
                             )
@@ -1787,6 +1780,7 @@ def interface():
                                             "Escolaridade": st.session_state.escolaridade,
                                             "Ano_escolar": st.session_state.ano_escolar,
                                             "revisao_rh": "Não (Estagiário Validado)",
+                                            "Fluxo_Documento": "Estagiário - Certidão de Nascimento", # 🚨
                                             "aceite_ia": aceite_ia,
                                             "aceite_lgpd": aceite_lgpd,
                                             "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1878,7 +1872,6 @@ def interface():
                                     elif not dados_a2.get("tem_averbacao_adocao"):
                                         st.error("⚠️ O documento não possui a averbação de adoção exigida.")
                                     else:
-                                        # VALIDAÇÃO RIGOROSA: Cruza Nome, Data de Nascimento e Sexo com o formulário
                                         dados_ok, msg_dados = valida_dados_crianca_certidao(
                                             dados_a2, nome_filho_a2, data_nascimento_a2, genero_a2
                                         )
@@ -1907,6 +1900,7 @@ def interface():
                                                             "Escolaridade": st.session_state.escolaridade,
                                                             "Ano_escolar": st.session_state.ano_escolar,
                                                             "revisao_rh": "Sim (Adoção A2)",
+                                                            "Fluxo_Documento": "A2 - Certidão de Nascimento com Averbação de Adoção", # 🚨
                                                             "aceite_ia": aceite_ia,
                                                             "aceite_lgpd": aceite_lgpd,
                                                             "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1965,6 +1959,7 @@ def interface():
                                                         "Escolaridade": st.session_state.escolaridade,
                                                         "Ano_escolar": st.session_state.ano_escolar,
                                                         "revisao_rh": "Sim (Guarda para Adoção A3)",
+                                                        "Fluxo_Documento": "A3 - Termo de Guarda para Fins de Adoção", # 🚨
                                                         "aceite_ia": aceite_ia,
                                                         "aceite_lgpd": aceite_lgpd,
                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2044,7 +2039,6 @@ def interface():
                                 if err_cert:
                                     st.error(f"⚠️ {err_cert}")
                                 else:
-                                    # NOVA VALIDAÇÃO (Idêntica ao Fluxo A): Barra datas de aniversário divergentes
                                     dados_ok, msg_dados = valida_dados_crianca_certidao(
                                         dados_cert, nome_filho_b, data_nascimento_b, genero_b
                                     )
@@ -2074,6 +2068,7 @@ def interface():
                                                         "Escolaridade": st.session_state.escolaridade,
                                                         "Ano_escolar": st.session_state.ano_escolar,
                                                         "revisao_rh": "Sim (Enteado - União Estável B1)",
+                                                        "Fluxo_Documento": "B1 - Certidão de Nascimento + União Estável (Firma Reconhecida)", # 🚨
                                                         "aceite_ia": aceite_ia,
                                                         "aceite_lgpd": aceite_lgpd,
                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2118,14 +2113,12 @@ def interface():
                                 if err_cert:
                                     st.error(f"⚠️ {err_cert}")
                                 else:
-                                    # VALIDAÇÃO RIGOROSA DA CRIANÇA
                                     dados_ok, msg_dados = valida_dados_crianca_certidao(
                                         dados_cert, nome_filho_b2, data_nascimento_b2, genero_b2
                                     )
                                     if not dados_ok:
                                         st.error(msg_dados)
                                     else:
-                                        # Se a certidão da criança está ok, valida o casamento
                                         dados_casam, err_casam = analisa_certidao_complementar(casamento_b2)
                                         if err_casam or not dados_casam.get("documento_valido"):
                                             st.error("⚠️ A Certidão de Casamento é inválida ou não pôde ser lida.")
@@ -2145,6 +2138,7 @@ def interface():
                                                         "Escolaridade": st.session_state.escolaridade,
                                                         "Ano_escolar": st.session_state.ano_escolar,
                                                         "revisao_rh": "Sim (Enteado - Casamento B2)",
+                                                        "Fluxo_Documento": "B2 - Certidão de Nascimento + Certidão de Casamento", # 🚨
                                                         "aceite_ia": aceite_ia,
                                                         "aceite_lgpd": aceite_lgpd,
                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2226,14 +2220,12 @@ def interface():
                                 if err_cert_c1:
                                     st.error(f"⚠️ {err_cert_c1}")
                                 else:
-                                    # VALIDAÇÃO RIGOROSA DA CRIANÇA
                                     dados_ok, msg_dados = valida_dados_crianca_certidao(
                                         dados_cert_c1, nome_filho_c1, data_nascimento_c1, genero_c1
                                     )
                                     if not dados_ok:
                                         st.error(msg_dados)
                                     else:
-                                        # Se certidão ok, valida a Guarda Judicial
                                         dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
                                         if err_guarda or not dados_guarda.get("documento_valido"):
                                             st.error("⚠️ O Termo de Guarda é inválido ou não pôde ser lido.")
@@ -2253,6 +2245,7 @@ def interface():
                                                         "Escolaridade": st.session_state.escolaridade,
                                                         "Ano_escolar": st.session_state.ano_escolar,
                                                         "revisao_rh": "Sim (Guarda Judicial C1)",
+                                                        "Fluxo_Documento": "C1 - Certidão de Nascimento + Guarda Judicial", # 🚨
                                                         "aceite_ia": aceite_ia,
                                                         "aceite_lgpd": aceite_lgpd,
                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2297,14 +2290,12 @@ def interface():
                                 if err_cert_c2:
                                     st.error(f"⚠️ {err_cert_c2}")
                                 else:
-                                    # VALIDAÇÃO RIGOROSA DA CRIANÇA
                                     dados_ok, msg_dados = valida_dados_crianca_certidao(
                                         dados_cert_c2, nome_filho_c2, data_nascimento_c2, genero_c2
                                     )
                                     if not dados_ok:
                                         st.error(msg_dados)
                                     else:
-                                        # Se certidão ok, valida a Tutela Judicial
                                         dados_tutela, err_tutela = analisa_tutela_judicial(termo_tutela_c2)
                                         if err_tutela or not dados_tutela.get("documento_valido"):
                                             st.error("⚠️ O Termo de Tutela é inválido ou não pôde ser lido.")
@@ -2324,6 +2315,7 @@ def interface():
                                                         "Escolaridade": st.session_state.escolaridade,
                                                         "Ano_escolar": st.session_state.ano_escolar,
                                                         "revisao_rh": "Sim (Tutela Judicial C2)",
+                                                        "Fluxo_Documento": "C2 - Certidão de Nascimento + Tutela Judicial", # 🚨
                                                         "aceite_ia": aceite_ia,
                                                         "aceite_lgpd": aceite_lgpd,
                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2332,6 +2324,5 @@ def interface():
                                                     st.session_state.aguardando_decisao = True
                                                     st.rerun()
                                             finally:
-                                                db.close()              
+                                                db.close()
 interface()
-                                                                        

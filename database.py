@@ -1,4 +1,3 @@
-# database.py
 import os
 from datetime import datetime
 from dotenv import load_dotenv
@@ -62,6 +61,9 @@ class Dependente(Base):
     aceite_ia = Column(Boolean, default=False)
     aceite_lgpd = Column(Boolean, default=False)
     data_aceite = Column(DateTime, nullable=True)
+
+    # 🚨 ADICIONADO: Coluna para registrar o fluxo e documento utilizado
+    fluxo_documento = Column(Text, nullable=True)
 
     colaborador = relationship("Colaborador", back_populates="dependentes")
     escolha = relationship("EscolhaKit", back_populates="dependente", uselist=False)
