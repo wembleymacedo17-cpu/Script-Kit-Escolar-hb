@@ -13,3 +13,4 @@ pydantic
 sqlalchemy
 psycopg2-binary
 oracledb
+supabase

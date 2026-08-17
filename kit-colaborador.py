@@ -18,6 +18,8 @@ import time
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
 from conector_oracle import OracleConnector
 from conector_Postgre import SupabaseConnector
+from supabase import create_client
+from notificador_email import NotificadorEmail, SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY, EMAIL_REMETENTE
 
 MODELOS_GEMINI = [
     "gemini-2.5-flash",        # 1ª Opção: Principal (Rápido e alta performance)
@@ -26,7 +28,10 @@ MODELOS_GEMINI = [
 ]
    
 load_dotenv()
-client_gemini = genai.Client()  
+client_gemini = genai.Client()
+
+# ==================== SUPABASE STORAGE (QR CODES) ====================
+
 
 # CONFIGURAÇÃO DE IA: A1  Certidão de Nascimento - Filho(a) Biológico(a)
 
@@ -512,6 +517,23 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
         supabase_connector.fechar_conexao()
 
 
+# ==================== VALIDAÇÃO DE E-MAIL PESSOAL ====================
+# O Brevo (SMTP usado no envio) não entrega para a maioria dos domínios corporativos.
+# Por isso só aceitamos e-mails de provedores pessoais conhecidos.
+DOMINIOS_PESSOAIS_PERMITIDOS = {
+    "gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "yahoo.com.br",
+    "icloud.com", "live.com", "bol.com.br", "uol.com.br", "terra.com.br",
+    "ig.com.br", "r7.com", "globo.com", "msn.com",
+}
+
+def eh_email_pessoal(email: str) -> bool:
+    """Retorna True se o domínio do e-mail estiver na lista de provedores pessoais aceitos."""
+    partes = email.strip().lower().split("@")
+    if len(partes) != 2:
+        return False
+    return partes[1] in DOMINIOS_PESSOAIS_PERMITIDOS
+
+
 def adiciona_dados_contato():
     print("Adicionando dados de contato...")
     with st.form("form_contato"):
@@ -535,7 +557,12 @@ def adiciona_dados_contato():
         erros.append("⚠️ O preenchimento e a confirmação do e-mail são obrigatórios.")
     elif email_digitado.lower() != email_confirmado.lower():
         erros.append("⚠️ Os e-mails não batem. Por favor, digite novamente.")
-        
+    elif not eh_email_pessoal(email_digitado):
+        erros.append(
+            "⚠️ Utilize um e-mail pessoal (Gmail, Hotmail, Outlook, Yahoo, iCloud, etc). "
+            "Não é possível enviar o QR Code para e-mails corporativos."
+        )
+
     if not telefone.strip():
         erros.append("⚠️ Telefone é obrigatório.")
     else:
@@ -1290,7 +1317,7 @@ def escolher_kits_colaborador():
     # ===================== ETAPA 2: CIÊNCIA SOBRE VARIAÇÃO DE MODELO/ESTOQUE =====================
     if st.session_state.aguardando_ciencia_kits:
         st.warning(
-            "As mochilas apresentadas possuem variações de cores e, em alguns casos, "
+            "⚠️As mochilas apresentadas possuem variações de cores e, em alguns casos, "
             "diferentes opções de acabamento.\n\n"
             "A distribuição estará condicionada ao estoque disponível na data de entrega. "
             "Caso o modelo escolhido não esteja disponível, será fornecida outra opção disponível."
@@ -1483,6 +1510,52 @@ def gerar_qrcode(conteudo_qrcode):
     buffer.seek(0)
 
     return buffer
+
+
+def salvar_qrcode_bucket(buffer_qrcode: BytesIO, cracha: str) -> str | None:
+    """Faz upload do QR Code para o bucket do Supabase, usando o crachá como nome do arquivo."""
+
+    SUPABASE_URL = os.getenv("SUPABASE_URL") 
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
+    BASE_URL_QRCODE = os.getenv("BASE_URL_QRCODE") 
+
+    
+    supabase_storage = create_client(SUPABASE_URL, SUPABASE_KEY)
+    BUCKET_QRCODES = "QRCODE"
+
+    nome_arquivo = f"{cracha}.png"
+    buffer_qrcode.seek(0)
+    
+    try:
+        supabase_storage.storage.from_(BUCKET_QRCODES).upload(
+            path=nome_arquivo,
+            file=buffer_qrcode.read(),
+            file_options={"content-type": "image/png", "upsert": "true"}
+        )
+        # Monta o link perfeitamente: url_pasta + nome_do_arquivo
+        return f"{BASE_URL_QRCODE}{nome_arquivo}"
+        
+    except Exception as e:
+        print(f"❌ Erro ao salvar QR Code no bucket do Supabase: {e}")
+        return None
+    finally:
+        buffer_qrcode.seek(0)
+
+
+def enviar_qrcode_por_email(email_destino: str, buffer_qrcode: BytesIO, cracha: str) -> bool:
+    """Envia o QR Code de retirada por e-mail ao colaborador."""
+    notificador = NotificadorEmail(SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY)
+    remetente = EMAIL_REMETENTE if EMAIL_REMETENTE else LOGIN_SMTP
+    sucesso = notificador.disparar(
+        remetente=remetente,
+        destinatarios=email_destino,
+        assunto="Seu QR Code - Retirada do Kit Escolar Funfarme",
+        corpo="Olá! Segue em anexo o QR Code para retirada do seu Kit Escolar.",
+        anexo=buffer_qrcode,
+        nome_anexo=f"qrcode_retirada_{cracha}.png"
+    )
+    buffer_qrcode.seek(0)
+    return sucesso
 #---------------------------------------------------------------------------------------------------QRCODE 
 def monta_resumo_kits(escolhas_kits):
     linhas_resumo = []
@@ -1557,6 +1630,13 @@ def exibir_qrcode_final():
 
     conteudo_qrcode = monta_conteudo_qrcode()
     imagem_qrcode = gerar_qrcode(conteudo_qrcode)
+
+    # Salva no bucket e envia por e-mail apenas uma vez por sessão/retirada
+    if not st.session_state.get("qrcode_processado", False):
+        cracha = str(retirada["ID_Colaborador"])
+        salvar_qrcode_bucket(imagem_qrcode, cracha)
+        enviar_qrcode_por_email(retirada["Email"], imagem_qrcode, cracha)
+        st.session_state.qrcode_processado = True
 
     st.image(
         imagem_qrcode,
