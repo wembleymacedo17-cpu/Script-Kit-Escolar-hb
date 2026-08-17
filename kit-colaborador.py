@@ -1631,13 +1631,7 @@ def exibir_qrcode_final():
     conteudo_qrcode = monta_conteudo_qrcode()
     imagem_qrcode = gerar_qrcode(conteudo_qrcode)
 
-    # Salva no bucket e envia por e-mail apenas uma vez por sessão/retirada
-    if not st.session_state.get("qrcode_processado", False):
-        cracha = str(retirada["ID_Colaborador"])
-        salvar_qrcode_bucket(imagem_qrcode, cracha)
-        enviar_qrcode_por_email(retirada["Email"], imagem_qrcode, cracha)
-        st.session_state.qrcode_processado = True
-
+    # 1. MOSTRA O QR CODE NA TELA PRIMEIRO
     st.image(
         imagem_qrcode,
         caption="Apresente este QR Code para retirada do kit.",
@@ -1650,6 +1644,24 @@ def exibir_qrcode_final():
         file_name=f"qrcode_retirada_{retirada['Codigo_Retirada']}.png",
         mime="image/png"
     )
+
+    # 2. DEPOIS FAZ UPLOAD E EMAIL (COM AVISO VISUAL DE PROCESSAMENTO)
+    if not st.session_state.get("qrcode_processado", False):
+        cracha = str(retirada["ID_Colaborador"])
+        
+        with st.spinner("☁️ Salvando e enviando cópia por e-mail..."):
+            # Envia pro Supabase
+            salvar_qrcode_bucket(imagem_qrcode, cracha)
+            
+            # Dispara o Email
+            sucesso_email = enviar_qrcode_por_email(retirada["Email"], imagem_qrcode, cracha)
+            
+            if sucesso_email:
+                st.success("✅ Cópia enviada para o seu e-mail!")
+            else:
+                st.warning("⚠️ O QR Code está gerado acima, mas houve falha ao enviar a cópia por e-mail.")
+                
+        st.session_state.qrcode_processado = True
 
     return imagem_qrcode
 
