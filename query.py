@@ -28,8 +28,9 @@ LEFT JOIN r024car car
     ON car.estcar = hca.estcar
    AND car.codcar = hca.codcar
 
-WHERE a.numemp IN (1, 2, 5) 
-  AND a.tipcol IN (1, 2)
+WHERE a.numemp = 1 
+  AND a.tipcol =  1
+
 
 ORDER BY a.nomfun
 """
@@ -63,3 +64,9 @@ DOMINIOS_PESSOAIS_PERMITIDOS = {
     "ig.com.br", "r7.com", "globo.com", "msn.com",
 }
 
+MODELOS_GEMINI = [
+    "gemini-2.5-flash",        
+    "gemini-1.5-flash",        
+    "gemini-3.1-flash-lite"
+]
+   
