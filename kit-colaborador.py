@@ -20,6 +20,7 @@ from conector_oracle import OracleConnector
 from conector_Postgre import SupabaseConnector
 from supabase import create_client
 from notificador_email import NotificadorEmail, SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY, EMAIL_REMETENTE
+from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS
 
 MODELOS_GEMINI = [
     "gemini-2.5-flash",        # 1ª Opção: Principal (Rápido e alta performance)
@@ -441,12 +442,7 @@ def analisa_certidao_complementar(arquivo):
         return None, "Erro ao ler o arquivo de casamento/divórcio."
 
 
-
-
-
-
 #---------------------------------------------------FUNCOES DE SISTEMA
-
 
 
 def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalidez"]):
@@ -454,7 +450,6 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
     print("Buscando colaborador no banco...")
     
     with st.form("form_busca"):
-
         cracha_digitado = st.text_input("Crachá:", placeholder="Digite o número e aperte Enter")
         buscar = st.form_submit_button("🔍 Buscar")
         
@@ -483,6 +478,8 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
         """
         df = pd.read_sql(query, supabase_connector.engine)
         colaborador = df.to_dict(orient="records")[0] if not df.empty else None
+        if colaborador:
+            print(f"DEBUG -> id_cargo bruto: {repr(colaborador['id_cargo'])} | tipo: {type(colaborador['id_cargo'])}")
         
         if not colaborador:
             st.error("⚠️ Crachá não encontrado na base de dados.")
@@ -493,6 +490,16 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             st.error(f"⚠️ Colaborador não elegível. Situação atual: {colaborador['descricao_situacao']}")
             st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
             return None
+
+        # ==================== NOVA VALIDAÇÃO DE CARGOS REJEITADOS ====================
+        if str(colaborador["id_cargo"]) in CARGOS_REJEIATO:
+            st.error(
+                "🎁 O Kit Escolar é uma iniciativa de apoio social direcionada a categorias específicas "
+                "da nossa instituição e, por isso, não está disponível para o seu cargo. "
+                "Agradecemos muito pela compreensão!"
+            )
+            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
+            return None
             
         # ==================== SALVA NO SESSION_STATE ====================
         st.session_state.colaborador = {
@@ -501,7 +508,6 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             "Nome": colaborador["nome"],
             "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
             "Descrição (Situação)": colaborador["descricao_situacao"],
-            # AQUI ESTÁ A CORREÇÃO: Garante que o id_cargo seja salvo como um número inteiro
             "id_cargo": int(colaborador["id_cargo"]) if colaborador.get("id_cargo") else None
         }
         
@@ -516,15 +522,6 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
     finally:
         supabase_connector.fechar_conexao()
 
-
-# ==================== VALIDAÇÃO DE E-MAIL PESSOAL ====================
-# O Brevo (SMTP usado no envio) não entrega para a maioria dos domínios corporativos.
-# Por isso só aceitamos e-mails de provedores pessoais conhecidos.
-DOMINIOS_PESSOAIS_PERMITIDOS = {
-    "gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "yahoo.com.br",
-    "icloud.com", "live.com", "bol.com.br", "uol.com.br", "terra.com.br",
-    "ig.com.br", "r7.com", "globo.com", "msn.com",
-}
 
 def eh_email_pessoal(email: str) -> bool:
     """Retorna True se o domínio do e-mail estiver na lista de provedores pessoais aceitos."""

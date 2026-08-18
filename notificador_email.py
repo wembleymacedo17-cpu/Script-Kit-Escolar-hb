@@ -10,7 +10,7 @@ load_dotenv()
 SMTP_SERVER = os.getenv("SERVIDOR_BREVO")
 SMTP_PORT = os.getenv("PORTA_BREVO")
 LOGIN_SMTP = os.getenv("LOGIN_SMTP")
-SENHA_KEY = os.getenv("SENHA")
+SENHA_KEY = os.getenv("SENHA_KEY")
 EMAIL_REMETENTE = os.getenv("EMAIL_REMETENTE")
 
 
@@ -50,16 +50,33 @@ class NotificadorEmail:
 
         msg.add_attachment(conteudo_anexo, maintype=tipo_principal, subtype=sub_tipo, filename=nome_anexo)
 
+        print(f"DEBUG -> From: {repr(remetente)} | To: {repr(destinatarios)} | Subject: {repr(assunto)}")
+
         try:
-            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
-                server.starttls()
-                server.login(self.login_smtp, self.senha)
-                server.send_message(msg)
+            server = smtplib.SMTP(self.smtp_server, self.smtp_port)
+            print("DEBUG -> Conexão TCP aberta")
+
+            server.ehlo()
+            print("DEBUG -> EHLO ok")
+
+            server.starttls()
+            print("DEBUG -> STARTTLS ok")
+
+            server.ehlo()
+            print("DEBUG -> EHLO pós-TLS ok")
+
+            server.login(self.login_smtp, self.senha)
+            print("DEBUG -> LOGIN ok")
+
+            server.send_message(msg)
+            print("DEBUG -> SEND_MESSAGE ok")
+
+            server.quit()
             print(f"✅ E-mail enviado para {len(destinatarios)} destinatário(s).")
             return True
         except smtplib.SMTPAuthenticationError as e:
             print(f"❌ Erro de autenticação retornado pelo Brevo: {e}")
             return False
         except Exception as e:
-            print(f"❌ Erro ao enviar e-mail: {e}")
+            print(f"❌ Erro ao enviar e-mail [{type(e).__name__}]: {e}")
             return False
