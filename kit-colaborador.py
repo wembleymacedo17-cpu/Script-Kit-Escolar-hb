@@ -18,7 +18,7 @@ import time
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
 from conector_oracle import OracleConnector
 from conector_Postgre import SupabaseConnector
-from supabase import create_client
+from supabase import create_client,Client
 from notificador_email import NotificadorEmail, SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY, EMAIL_REMETENTE
 from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY
 
@@ -686,17 +686,19 @@ def adicionar_dependentes():
     st.subheader("👶 Adicionar Dependente")
     st.write(f"Nome Responsável: {st.session_state.colaborador['Nome']}")
 
+    # Inicializa variáveis de controle de erro no session_state
     if 'escolaridade' not in st.session_state:
         st.session_state.escolaridade = ""
     if 'ano_escolar' not in st.session_state:
         st.session_state.ano_escolar = ""
+    if 'erro_ia_a1' not in st.session_state:
+        st.session_state.erro_ia_a1 = None
 
     st.selectbox(
         "Escolaridade",
         ["", "Educação Infantil", "Ensino Fundamental I", "Ensino Fundamental II", "Ensino Médio"],
         format_func=lambda x: "Selecione a Escolaridade..." if x == "" else x,
-        key="escolaridade",
-        on_change=lambda: None
+        key="escolaridade"
     )
 
     opcoes_ano = {
@@ -716,7 +718,7 @@ def adicionar_dependentes():
         )
 
     # =========================================================
-    # FORMULÁRIO PRINCIPAL DE ADIÇÃO (DIRETO AO CARRINHO)
+    # FORMULÁRIO PRINCIPAL DE ADIÇÃO 
     # =========================================================
     with st.form("form_dependente"):
         nome_filho    = st.text_input("Nome Completo da Criança")
@@ -728,24 +730,24 @@ def adicionar_dependentes():
         
         certidao      = st.file_uploader(
             "Anexar Certidão de Nascimento ou RG 📄",
-            type=["pdf", "png", "jpg", "jpeg"],
-            help="Pode enviar foto, imagem escaneada ou PDF. Se enviar RG, garanta que a filiação (verso) esteja visível."
+            type=["pdf", "png", "jpg", "jpeg"]
         )
         declaracao_escolar = st.file_uploader(
             "Anexar Declaração Escolar de Matrícula 📚",
             type=["pdf", "png", "jpg", "jpeg"],
-            key="declaracao_escolar_a1",
-            help="A declaração deve comprovar a matrícula e informar o nome do aluno."
+            key="declaracao_escolar_a1"
         )
         
         st.divider()
-        # 🚨 ADICIONADO: BYPASS / ROTA DE FUGA PARA ANÁLISE MANUAL
-        solicitar_rh_a1 = st.checkbox(
-            "⚠️ A IA rejeitou minha declaração escolar, quero enviá-la para análise visual e manual do RH.",
-            key="rh_a1"
-        )
         
-        # 🔒 CHECKBOXES DE COMPLIANCE 
+        forcar_envio_rh = False
+        if st.session_state.erro_ia_a1:
+            st.error(f"⚠️ A IA encontrou uma divergência: {st.session_state.erro_ia_a1}")
+            forcar_envio_rh = st.checkbox(
+                "Declaro que o documento é autêntico. Quero forçar o envio para análise visual e manual do RH.", 
+                key="rh_a1_bypass"
+            )
+        
         aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_dep")
         aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_dep")
         
@@ -755,96 +757,110 @@ def adicionar_dependentes():
         return None
 
     erros = []
-    if not nome_filho.strip():
-        erros.append("❌ Nome da criança é obrigatório.")
-    elif len(nome_filho.strip()) < 3:
-        erros.append("❌ Nome muito curto.")
-    elif re.search(r'[^a-zA-ZÀ-ÿ\s]', nome_filho):
-        erros.append("❌ Nome não pode conter números ou caracteres especiais.")
-
-    if not genero:
-        erros.append("❌ Gênero é obrigatório.")
-    if not st.session_state.escolaridade:
-        erros.append("❌ Escolaridade é obrigatória.")
-    if not st.session_state.ano_escolar:
-        erros.append("❌ Ano Escolar é obrigatório.")
-    
-    if not certidao:
-        erros.append("❌ Certidão de Nascimento ou RG é obrigatório.")
-    
-    if not declaracao_escolar:
-        erros.append("❌ Declaração escolar de matrícula é obrigatória.")
-    if not aceite_ia or not aceite_lgpd:
-        erros.append("❌ Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
+    if not nome_filho.strip(): erros.append("❌ Nome da criança é obrigatório.")
+    elif len(nome_filho.strip()) < 3: erros.append("❌ Nome muito curto.")
+    elif re.search(r'[^a-zA-ZÀ-ÿ\s]', nome_filho): erros.append("❌ Nome não pode conter números ou caracteres especiais.")
+    if not genero: erros.append("❌ Gênero é obrigatório.")
+    if not st.session_state.escolaridade: erros.append("❌ Escolaridade é obrigatória.")
+    if not st.session_state.ano_escolar: erros.append("❌ Ano Escolar é obrigatório.")
+    if not certidao: erros.append("❌ Certidão de Nascimento ou RG é obrigatório.")
+    if not declaracao_escolar: erros.append("❌ Declaração escolar de matrícula é obrigatória.")
+    if not aceite_ia or not aceite_lgpd: erros.append("❌ Você deve aceitar os termos da LGPD e IA.")
 
     if erros:
-        for x in erros:
-            st.error(x)
+        for x in erros: st.error(x)
         return None
 
     db = SessionLocal()
     try:
-        # 1. Validação cruzada de duplicidade (Carrinho + Banco)
         if verificar_crianca_duplicada(db, nome_filho, data_nascimento):
             st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
             return None
 
-        # 2. Análise da certidão com Gemini
+        # =========================================================
+        # 💡 CURTO-CIRCUITO: SE O USUÁRIO JÁ MARCOU BYPASS, PULA A IA!
+        # =========================================================
+        if forcar_envio_rh:
+            with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                cracha_colab = st.session_state.colaborador['Crachá']
+                
+                # Sobe o documento relevante (Declaração Escolar ou Certidão)
+                try:
+                    url_doc = upload_documento_supabase(declaracao_escolar, "declaracao_escolar", cracha_colab)
+                except Exception as e:
+                    url_doc = None
+            
+            erro_salvo = st.session_state.erro_ia_a1
+            st.session_state.erro_ia_a1 = None  # Limpa o erro do estado
+            nome_final = padroniza_texto(nome_filho)
+            
+            st.warning("⚠️ O documento foi enviado para a Análise Visual e Manual do RH. Sua solicitação está em quarentena.")
+            time.sleep(2)
+            
+            return {
+                "ID_Dependente": None,
+                "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                "Nome_filho": nome_final,
+                "Gênero": genero,
+                "Data_nascimento": data_nascimento.strftime("%d/%m/%Y"),
+                "Escolaridade": st.session_state.escolaridade,
+                "Ano_escolar": st.session_state.ano_escolar,
+                "revisao_rh": "Revisão Manual (Bypass Usuário)",
+                "Fluxo_Documento": "A1 - Identidade (Cert/RG) + Declaração Escolar (Filho Biológico)",
+                "motivo_reprova_ia": f"Causa do erro: {erro_salvo}",
+                "url_documento": url_doc,
+                "aceite_ia": aceite_ia,
+                "aceite_lgpd": aceite_lgpd,
+                "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
+        # =========================================================
+        # FLUXO NORMAL (Primeira tentativa com a IA)
+        # =========================================================
         with st.spinner("🔍 Analisando documento de identidade, aguarde..."):
             dados_certidao, erro_api = analisa_certidao(certidao)
-        
+            
         if erro_api:
-            st.error(erro_api)
-            return None
+            st.session_state.erro_ia_a1 = erro_api
+            st.rerun()
 
-        # 3. Tratamento para documento ilegível ou inválido
         if not dados_certidao.get("legivel", True) or not dados_certidao.get("documento_valido", True):
-            st.error("❌ Documento inválido ou ilegível, mande outro arquivo (Certidão de Nascimento ou RG)")
-            return None
+            st.session_state.erro_ia_a1 = "Documento de identidade inválido ou ilegível."
+            st.rerun()
 
-        # 4. Validações dos dados da criança na certidão
         dados_ok, msg_dados = valida_dados_crianca_certidao(dados_certidao, nome_filho, data_nascimento, genero)
         if not dados_ok:
-            st.error(msg_dados)
-            return None
+            st.session_state.erro_ia_a1 = msg_dados
+            st.rerun()
 
-        # 5. VALIDAÇÃO DA DECLARAÇÃO ESCOLAR
-        with st.spinner("📚 Validando declaração escolar e correspondência do nome... Aguarde"):
+        with st.spinner("📚 Validando declaração escolar e correspondência do nome..."):
             dados_declaracao, erro_declaracao = analisa_declaracao_escolar(declaracao_escolar)
-
+            
         if erro_declaracao:
-            st.error(erro_declaracao)
-            return None
+            st.session_state.erro_ia_a1 = erro_declaracao
+            st.rerun()
 
-        # 🚨 ALTERADO: Recebe os 3 retornos e trata o Bypass / Validação Eletrônica
         declaracao_ok, msg_declaracao, status_rh_decl = valida_declaracao_escolar(
             dados_declaracao, dados_certidao.get("nome_crianca") or nome_filho
         )
-        
-        status_revisao_final = status_rh_decl
 
-        if not declaracao_ok:
-            if solicitar_rh_a1:
-                st.warning("⚠️ Declaração escolar reprovada pela IA, mas o envio manual foi solicitado. O RH analisará visualmente.")
-                status_revisao_final = "Revisão Manual (Bypass IA - Declaração A1)"
-            else:
-                st.error(msg_declaracao)
-                return None
-        else:
-            st.success(msg_declaracao)
-
-        # 6. VALIDAÇÃO RÍGIDA DO NOME DOS PAIS (BLOQUEIO OBRIGATÓRIO SE NÃO BATER)
-        valido, mensagem = valida_nome_pais_certidao(
+        valido_pais, mensagem_pais = valida_nome_pais_certidao(
             dados_certidao, st.session_state.colaborador['Nome']
         )
 
-        if not valido:
-            st.error(f"⚠️ O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como pai/mãe no documento enviado.")
-            return None
-        else:
-            st.success(mensagem)
+        # Trata falhas de validação da IA
+        tem_erro_ia = not declaracao_ok or not valido_pais
+        
+        if tem_erro_ia:
+            mensagem_erro_atual = msg_declaracao if not declaracao_ok else mensagem_pais
+            st.session_state.erro_ia_a1 = mensagem_erro_atual
+            st.rerun() # Recarrega a tela exibindo o checkbox de bypass
 
-        # Retorna o dicionário para ser inserido no carrinho (Session State)
+        # Sucesso absoluto da IA
+        st.session_state.erro_ia_a1 = None
+        st.success("✅ Documento validado com sucesso pela IA!")
+        time.sleep(1.5)
+
         nome_final = padroniza_texto(dados_certidao.get("nome_crianca") or nome_filho)
         return {
             "ID_Dependente": None,
@@ -854,8 +870,10 @@ def adicionar_dependentes():
             "Data_nascimento": data_nascimento.strftime("%d/%m/%Y"),
             "Escolaridade": st.session_state.escolaridade,
             "Ano_escolar": st.session_state.ano_escolar,
-            "revisao_rh": status_revisao_final,  # 🚨 GRAVA O STATUS CORRETO DO RH
+            "revisao_rh": status_rh_decl,  
             "Fluxo_Documento": "A1 - Identidade (Cert/RG) + Declaração Escolar (Filho Biológico)",
+            "motivo_reprova_ia": None,
+            "url_documento": None,
             "aceite_ia": aceite_ia,
             "aceite_lgpd": aceite_lgpd,
             "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1425,45 +1443,43 @@ def gerar_qrcode(conteudo_qrcode):
     buffer.seek(0)
 
     return buffer
-import uuid
-from supabase import create_client, Client
 
-# Configure com suas credenciais do .env
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def upload_documento_supabase(arquivo_buffer, tipo_documento, cracha):
-    SUPABASE_URL = os.getenv("BASE_URL_DOCUMENTO_ANALISE")
+
+
+def upload_documento_supabase(arquivo_buffer, tipo_documento, cracha) -> str | None:
+    """Faz upload do documento de revisão para o bucket do Supabase."""
+    
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    BASE_URL_DOCUMENTO_ANALISE = os.getenv("BASE_URL_DOCUMENTO_ANALISE")
+    
+    # Instancia o client da mesma forma segura que o QR Code faz
+    supabase_storage = create_client(SUPABASE_URL, SUPABASE_KEY)
+    BUCKET_DOCS = "Documentos_Revisao"
 
-    """
-    Salva o arquivo no bucket seguindo o padrão: tipo-cracha-uuid.pdf
-    Retorna a URL pública do documento.
-    """
+    # Gera o nome seguindo o padrão exigido
+    hash_curto = uuid.uuid4().hex[:6]
+    extensao = arquivo_buffer.name.split('.')[-1]
+    nome_arquivo = f"{tipo_documento}-{cracha}-{hash_curto}.{extensao}"
+    
+    arquivo_buffer.seek(0)
+    
     try:
-        # Gera um ID curto para evitar sobrescrever se ele reenviar
-        hash_curto = uuid.uuid4().hex[:6]
-        extensao = arquivo_buffer.name.split('.')[-1]
-        nome_arquivo = f"{tipo_documento}-{cracha}-{hash_curto}.{extensao}"
-        
-        arquivo_bytes = arquivo_buffer.getvalue()
-        
-        # Envia para o bucket (substitua 'documentos_rh' pelo nome do seu bucket)
-        res = supabase.storage.from_("documentos_rh").upload(
+        supabase_storage.storage.from_(BUCKET_DOCS).upload(
             path=nome_arquivo,
-            file=arquivo_bytes,
-            file_options={"content-type": arquivo_buffer.type}
+            file=arquivo_buffer.read(),
+            file_options={"content-type": arquivo_buffer.type, "upsert": "true"}
         )
         
-        # Pega a URL pública
-        url = supabase.storage.from_("documentos_rh").get_public_url(nome_arquivo)
-        return url
+        # Retorna a URL montada perfeitamente usando a variável do .env
+        return f"{BASE_URL_DOCUMENTO_ANALISE}{nome_arquivo}"
+        
     except Exception as e:
-        print(f"Erro no upload para o Supabase: {e}")
+        print(f"❌ Erro ao salvar documento no bucket do Supabase: {e}")
         return None
-
+    finally:
+        arquivo_buffer.seek(0)
 def salvar_qrcode_bucket(buffer_qrcode: BytesIO, cracha: str) -> str | None:
     """Faz upload do QR Code para o bucket do Supabase, usando o crachá como nome do arquivo."""
 
@@ -1665,7 +1681,7 @@ def interface():
                     st.caption(f"Ano: {dep.get('Ano_escolar', '')} | Nasc: {dep.get('Data_nascimento', '')}")
                     st.markdown("---")
                 
-                if st.button("🚀 Finalizar Carrinho e Escolher Kits", type="primary", width='stretch', key="btn_fin_sidebar"):
+                if st.button("🛒 Finalizar Carrinho e Escolher Kits", type="primary", width='stretch', key="btn_fin_sidebar"):
                     db = SessionLocal()
                     try:
                         for dep in st.session_state.lista_dependentes:
@@ -1681,7 +1697,9 @@ def interface():
                                     fluxo_documento=dep.get("Fluxo_Documento", "Não identificado"),
                                     aceite_ia=dep.get("aceite_ia", False),
                                     aceite_lgpd=dep.get("aceite_lgpd", False),
-                                    data_aceite=datetime.strptime(dep["data_aceite"], "%Y-%m-%d %H:%M:%S") if dep.get("data_aceite") else None
+                                    data_aceite=datetime.strptime(dep["data_aceite"], "%Y-%m-%d %H:%M:%S") if dep.get("data_aceite") else None,
+                                    motivo_reprova_ia=dep.get("motivo_reprova_ia"),
+                                    url_documento=dep.get("url_documento")
                                 )
                                 db.add(novo_dep_db)
                                 db.commit()
@@ -1689,7 +1707,6 @@ def interface():
                                 dep["ID_Dependente"] = novo_dep_db.id_dependente
                     finally:
                         db.close()
-
                     st.session_state.aguardando_decisao = False
                     st.session_state.escolhendo_kits = True
                     st.rerun()
@@ -1779,9 +1796,12 @@ def interface():
                     st.session_state.dados_certidao_filho = None
                     st.session_state.dependente_temp = None
                     st.session_state.tipo_fluxo = None 
+                    
                     if 'sub_opcao_a' in st.session_state: del st.session_state['sub_opcao_a']
                     if 'sub_opcao_b' in st.session_state: del st.session_state['sub_opcao_b']
                     if 'sub_opcao_c' in st.session_state: del st.session_state['sub_opcao_c']
+                    if 'erro_ia_a1' in st.session_state: del st.session_state['erro_ia_a1']
+                    
                     st.rerun()
             with col2:
                 if st.button("🚀 Finalizar carrinho e escolher kits", width='stretch', key="btn_fin_main"):
@@ -1800,7 +1820,9 @@ def interface():
                                     fluxo_documento=dep.get("Fluxo_Documento", "Não identificado"),
                                     aceite_ia=dep.get("aceite_ia", False),
                                     aceite_lgpd=dep.get("aceite_lgpd", False),
-                                    data_aceite=datetime.strptime(dep["data_aceite"], "%Y-%m-%d %H:%M:%S") if dep.get("data_aceite") else None
+                                    data_aceite=datetime.strptime(dep["data_aceite"], "%Y-%m-%d %H:%M:%S") if dep.get("data_aceite") else None,
+                                    motivo_reprova_ia=dep.get("motivo_reprova_ia"),
+                                    url_documento=dep.get("url_documento")
                                 )
                                 db.add(novo_dep_db)
                                 db.commit()
@@ -1808,10 +1830,11 @@ def interface():
                                 dep["ID_Dependente"] = novo_dep_db.id_dependente
                     finally:
                         db.close()
-
                     st.session_state.aguardando_decisao = False
                     st.session_state.escolhendo_kits = True
                     st.rerun()
+                    
+            # 🛑 PARADA OBRIGATÓRIA: Impede que o script continue desenhando os formulários abaixo da mensagem de sucesso
             return
 
         # SELEÇÃO DO FLUXO PRINCIPAL
@@ -1898,7 +1921,9 @@ def interface():
                                             "Fluxo_Documento": "Estagiário - Certidão de Nascimento ou RG",
                                             "aceite_ia": aceite_ia,
                                             "aceite_lgpd": aceite_lgpd,
-                                            "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                            "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                            "motivo_reprova_ia": None,
+                                            "url_documento": None
                                         })
                                         st.success("✅ Documento validado! Seu Kit foi adicionado ao carrinho.")
                                         st.session_state.aguardando_decisao = True
@@ -1964,7 +1989,6 @@ def interface():
                             declaracao_escolar_a2 = st.file_uploader("Anexar Declaração Escolar de Matrícula 📚", type=["pdf", "png", "jpg", "jpeg"], key="declaracao_escolar_a2")
                             
                             st.divider()
-                            # 🚨 ADICIONADO: BYPASS / ROTA DE FUGA
                             solicitar_rh_a2 = st.checkbox("⚠️ A IA rejeitou minha declaração escolar, quero enviá-la para análise visual e manual do RH.", key="rh_a2")
                             aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_a2")
                             aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_a2")
@@ -2000,11 +2024,11 @@ def interface():
                                         else:
                                             dados_decl_a2, err_decl_a2 = analisa_declaracao_escolar(declaracao_escolar_a2)
                                             decl_ok_a2 = False
+                                            motivo_reprova = None 
                                             
                                             if err_decl_a2:
                                                 st.error(err_decl_a2)
                                             else:
-                                                # 🚨 ALTERADO: Recebe os 3 retornos + lógica de bypass
                                                 decl_ok_a2, msg_decl_a2, status_rh_a2 = valida_declaracao_escolar(
                                                     dados_decl_a2, dados_a2.get("nome_crianca") or nome_filho_a2
                                                 )
@@ -2015,6 +2039,7 @@ def interface():
                                                     if solicitar_rh_a2:
                                                         st.warning("⚠️ Declaração reprovada pela IA, mas o envio manual foi solicitado. O RH analisará visualmente.")
                                                         status_final_rh_a2 = "Revisão Manual (Bypass IA - Declaração A2)"
+                                                        motivo_reprova = msg_decl_a2 
                                                         decl_ok_a2 = True
                                                     else:
                                                         st.error(msg_decl_a2)
@@ -2032,23 +2057,34 @@ def interface():
                                                 else:
                                                     db = SessionLocal()
                                                     try:
-                                                        nome_cert_a2 = padroniza_texto(dados_a2.get("nome_crianca", "")) or padroniza_texto(nome_filho_a2)
-                                                        if verificar_crianca_duplicada(db, nome_cert_a2, data_nascimento_a2):
+                                                        nome_extraido_a2 = dados_a2.get("nome_crianca", "")
+                                                        nome_final_a2 = padroniza_texto(nome_extraido_a2) if nome_extraido_a2 else padroniza_texto(nome_filho_a2)
+                                                        
+                                                        if verificar_crianca_duplicada(db, nome_final_a2, data_nascimento_a2):
                                                             st.error("⚠️ Esta criança está no seu carrinho ou já possui um kit cadastrado.")
                                                         else:
+                                                            url_doc_a2 = None
+                                                            if solicitar_rh_a2:
+                                                                try:
+                                                                    url_doc_a2 = upload_documento_supabase(declaracao_escolar_a2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                                                except Exception:
+                                                                    url_doc_a2 = None
+
                                                             st.session_state.lista_dependentes.append({
                                                                 "ID_Dependente": None,
                                                                 "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                                "Nome_filho": nome_cert_a2,
+                                                                "Nome_filho": nome_final_a2,
                                                                 "Gênero": genero_a2,
                                                                 "Data_nascimento": data_nascimento_a2.strftime("%d/%m/%Y"),
                                                                 "Escolaridade": st.session_state.escolaridade,
                                                                 "Ano_escolar": st.session_state.ano_escolar,
-                                                                "revisao_rh": status_final_rh_a2, # 🚨 SALVA COM O STATUS ATUALIZADO
+                                                                "revisao_rh": status_final_rh_a2, 
                                                                 "Fluxo_Documento": "A2 - Certidão de Nascimento com Averbação de Adoção",
                                                                 "aceite_ia": aceite_ia,
                                                                 "aceite_lgpd": aceite_lgpd,
-                                                                "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                                "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                                "motivo_reprova_ia": motivo_reprova,
+                                                                "url_documento": url_doc_a2
                                                             })
                                                             st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                             st.session_state.aguardando_decisao = True
@@ -2091,10 +2127,18 @@ def interface():
                                         else:
                                             db = SessionLocal()
                                             try:
-                                                nome_final_a3 = padroniza_texto(dados_a3.get("nome_crianca", "")) or padroniza_texto(nome_filho_a3)
+                                                nome_extraido_a3 = dados_a3.get("nome_crianca", "")
+                                                nome_final_a3 = padroniza_texto(nome_extraido_a3) if nome_extraido_a3 else padroniza_texto(nome_filho_a3)
+                                                
                                                 if verificar_crianca_duplicada(db, nome_final_a3, data_nascimento_a3):
                                                     st.error("⚠️ Esta criança está no seu carrinho ou já possui um kit cadastrado.")
                                                 else:
+                                                    url_doc_a3 = None
+                                                    try:
+                                                        url_doc_a3 = upload_documento_supabase(doc_judicial, "doc_judicial", st.session_state.colaborador['Crachá'])
+                                                    except Exception:
+                                                        url_doc_a3 = None
+
                                                     st.session_state.lista_dependentes.append({
                                                         "ID_Dependente": None,
                                                         "ID_Colaborador": st.session_state.colaborador['Crachá'],
@@ -2107,7 +2151,9 @@ def interface():
                                                         "Fluxo_Documento": "A3 - Termo de Guarda para Fins de Adoção", 
                                                         "aceite_ia": aceite_ia,
                                                         "aceite_lgpd": aceite_lgpd,
-                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                        "motivo_reprova_ia": None,
+                                                        "url_documento": url_doc_a3
                                                     })
                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                     st.session_state.aguardando_decisao = True
@@ -2163,97 +2209,108 @@ def interface():
                         declaracao_escolar_b1 = st.file_uploader("Anexar Declaração Escolar de Matrícula 📚", type=["pdf", "png", "jpg", "jpeg"], key="declaracao_escolar_b1")
                         
                         st.divider()
-                        # 🚨 ADICIONADO: BYPASS / ROTA DE FUGA
                         solicitar_rh_b1 = st.checkbox("⚠️ A IA rejeitou minha declaração escolar, quero enviá-la para análise visual e manual do RH.", key="rh_b1")
                         aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_b1")
                         aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_b1")
                         salvar_b1 = st.form_submit_button("Validar e Adicionar ao Carrinho (B1)")
 
-                if salvar_b1:
-                    erros_b = []
-                    if not nome_filho_b.strip(): erros_b.append("O nome da criança é obrigatório.")
-                    if not genero_b: erros_b.append("O gênero é obrigatório.")
-                    if not st.session_state.escolaridade: erros_b.append("A escolaridade é obrigatória.")
-                    if not st.session_state.ano_escolar: erros_b.append("O ano escolar é obrigatório.")
-                    if not certidao_b: erros_b.append("A Certidão de Nascimento ou RG é obrigatória.")
-                    if not uniao_b: erros_b.append("A declaração de união estável é obrigatória.")
-                    if not declaracao_escolar_b1: erros_b.append("A declaração escolar de matrícula é obrigatória.")
-                    if not aceite_ia or not aceite_lgpd: erros_b.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
-                        
-                    if erros_b:
-                        for e in erros_b: st.error(f"⚠️ {e}")
-                    else:
-                         with st.spinner("Analisando documentos com a IA... Aguarde"):
-                            dados_cert, err_cert = analisa_certidao(certidao_b)
+                    if salvar_b1:
+                        erros_b = []
+                        if not nome_filho_b.strip(): erros_b.append("O nome da criança é obrigatório.")
+                        if not genero_b: erros_b.append("O gênero é obrigatório.")
+                        if not st.session_state.escolaridade: erros_b.append("A escolaridade é obrigatória.")
+                        if not st.session_state.ano_escolar: erros_b.append("O ano escolar é obrigatório.")
+                        if not certidao_b: erros_b.append("A Certidão de Nascimento ou RG é obrigatória.")
+                        if not uniao_b: erros_b.append("A declaração de união estável é obrigatória.")
+                        if not declaracao_escolar_b1: erros_b.append("A declaração escolar de matrícula é obrigatória.")
+                        if not aceite_ia or not aceite_lgpd: erros_b.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
                             
-                            if err_cert:
-                                st.error(f"❌ Erro ao processar a Certidão/RG: {err_cert}")
-                            else:
-                                dados_ok, msg_dados = valida_dados_crianca_certidao(
-                                    dados_cert, nome_filho_b, data_nascimento_b, genero_b
-                                )
+                        if erros_b:
+                            for e in erros_b: st.error(f"⚠️ {e}")
+                        else:
+                             with st.spinner("Analisando documentos com a IA... Aguarde"):
+                                dados_cert, err_cert = analisa_certidao(certidao_b)
                                 
-                                if not dados_ok:
-                                    st.error(f"❌ Divergência na Certidão/RG: {msg_dados}")
+                                if err_cert:
+                                    st.error(f"❌ Erro ao processar a Certidão/RG: {err_cert}")
                                 else:
-                                    dados_decl_b1, err_decl_b1 = analisa_declaracao_escolar(declaracao_escolar_b1)
-                                    decl_ok_b1 = False
+                                    dados_ok, msg_dados = valida_dados_crianca_certidao(
+                                        dados_cert, nome_filho_b, data_nascimento_b, genero_b
+                                    )
                                     
-                                    if err_decl_b1:
-                                        st.error(f"❌ Erro na Declaração Escolar: {err_decl_b1}")
+                                    if not dados_ok:
+                                        st.error(f"❌ Divergência na Certidão/RG: {msg_dados}")
                                     else:
-                                        # 🚨 ALTERADO: Recebe 3 retornos e aplica Lógica de Bypass
-                                        decl_ok_b1, msg_decl_b1, status_rh_b1 = valida_declaracao_escolar(
-                                            dados_decl_b1, dados_cert.get("nome_crianca") or nome_filho_b
-                                        )
+                                        dados_decl_b1, err_decl_b1 = analisa_declaracao_escolar(declaracao_escolar_b1)
+                                        decl_ok_b1 = False
+                                        motivo_reprova = None 
                                         
-                                        status_final_rh_b1 = "Sim (Enteado - União Estável B1)"
-
-                                        if not decl_ok_b1:
-                                            if solicitar_rh_b1:
-                                                st.warning("⚠️ Declaração reprovada pela IA, mas o envio manual foi solicitado. O RH analisará visualmente.")
-                                                status_final_rh_b1 = "Revisão Manual (Bypass IA - Declaração B1)"
-                                                decl_ok_b1 = True
-                                            else:
-                                                st.error(f"❌ {msg_decl_b1}")
+                                        if err_decl_b1:
+                                            st.error(f"❌ Erro na Declaração Escolar: {err_decl_b1}")
                                         else:
-                                            st.success(msg_decl_b1)
-                                            if status_rh_b1 == "Sim (Validação Eletrônica)":
-                                                status_final_rh_b1 = "Sim (Validação Eletr. + União Estável B1)"
+                                            decl_ok_b1, msg_decl_b1, status_rh_b1 = valida_declaracao_escolar(
+                                                dados_decl_b1, dados_cert.get("nome_crianca") or nome_filho_b
+                                            )
+                                            
+                                            status_final_rh_b1 = "Sim (Enteado - União Estável B1)"
 
-                                    if decl_ok_b1:
-                                        dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
-                                        
-                                        if err_uniao:
-                                            st.error(f"❌ Erro na União Estável: {err_uniao}")
-                                        elif not dados_uniao.get("firma_reconhecida"):
-                                            st.error("⚠️ A Declaração de União Estável precisa ter firma reconhecida em cartório visível.")
-                                        else:
-                                            db = SessionLocal()
-                                            try:
-                                                nome_final_b1 = padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b)
-                                                if verificar_crianca_duplicada(db, nome_final_b1, data_nascimento_b):
-                                                    st.error("⚠️ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
+                                            if not decl_ok_b1:
+                                                if solicitar_rh_b1:
+                                                    st.warning("⚠️ Declaração reprovada pela IA, mas o envio manual foi solicitado. O RH analisará visualmente.")
+                                                    status_final_rh_b1 = "Revisão Manual (Bypass IA - Declaração B1)"
+                                                    motivo_reprova = msg_decl_b1 
+                                                    decl_ok_b1 = True
                                                 else:
-                                                    st.session_state.lista_dependentes.append({
-                                                        "ID_Dependente": None,
-                                                        "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                        "Nome_filho": nome_final_b1,
-                                                        "Gênero": genero_b,
-                                                        "Data_nascimento": data_nascimento_b.strftime("%d/%m/%Y"),
-                                                        "Escolaridade": st.session_state.escolaridade,
-                                                        "Ano_escolar": st.session_state.ano_escolar,
-                                                        "revisao_rh": status_final_rh_b1, # 🚨 SALVA O STATUS COMBINADO
-                                                        "Fluxo_Documento": "B1 - Identidade + União Estável (Firma Reconhecida)",
-                                                        "aceite_ia": aceite_ia,
-                                                        "aceite_lgpd": aceite_lgpd,
-                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                                    })
-                                                    st.success("✅ Dependente adicionado ao carrinho com sucesso!")
-                                                    st.session_state.aguardando_decisao = True
-                                                    st.rerun()
-                                            finally:
-                                                db.close()
+                                                    st.error(f"❌ {msg_decl_b1}")
+                                            else:
+                                                st.success(msg_decl_b1)
+                                                if status_rh_b1 == "Sim (Validação Eletrônica)":
+                                                    status_final_rh_b1 = "Sim (Validação Eletr. + União Estável B1)"
+
+                                        if decl_ok_b1:
+                                            dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
+                                            
+                                            if err_uniao:
+                                                st.error(f"❌ Erro na União Estável: {err_uniao}")
+                                            elif not dados_uniao.get("firma_reconhecida"):
+                                                st.error("⚠️ A Declaração de União Estável precisa ter firma reconhecida em cartório visível.")
+                                            else:
+                                                db = SessionLocal()
+                                                try:
+                                                    nome_extraido_b1 = dados_cert.get("nome_crianca", "")
+                                                    nome_final_b1 = padroniza_texto(nome_extraido_b1) if nome_extraido_b1 else padroniza_texto(nome_filho_b)
+                                                    
+                                                    if verificar_crianca_duplicada(db, nome_final_b1, data_nascimento_b):
+                                                        st.error("⚠️ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
+                                                    else:
+                                                        url_doc_b1 = None
+                                                        if solicitar_rh_b1:
+                                                            try:
+                                                                url_doc_b1 = upload_documento_supabase(declaracao_escolar_b1, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                                            except Exception:
+                                                                url_doc_b1 = None
+
+                                                        st.session_state.lista_dependentes.append({
+                                                            "ID_Dependente": None,
+                                                            "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                                                            "Nome_filho": nome_final_b1,
+                                                            "Gênero": genero_b,
+                                                            "Data_nascimento": data_nascimento_b.strftime("%d/%m/%Y"),
+                                                            "Escolaridade": st.session_state.escolaridade,
+                                                            "Ano_escolar": st.session_state.ano_escolar,
+                                                            "revisao_rh": status_final_rh_b1, 
+                                                            "Fluxo_Documento": "B1 - Identidade + União Estável (Firma Reconhecida)",
+                                                            "aceite_ia": aceite_ia,
+                                                            "aceite_lgpd": aceite_lgpd,
+                                                            "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                            "motivo_reprova_ia": motivo_reprova,
+                                                            "url_documento": url_doc_b1
+                                                        })
+                                                        st.success("✅ Dependente adicionado ao carrinho com sucesso!")
+                                                        st.session_state.aguardando_decisao = True
+                                                        st.rerun()
+                                                finally:
+                                                    db.close()
 
                 # --- FORMA B2 ---
                 elif "B2" in sub_opcao_b:
@@ -2268,7 +2325,6 @@ def interface():
                         declaracao_escolar_b2 = st.file_uploader("Anexar Declaração Escolar de Matrícula 📚", type=["pdf", "png", "jpg", "jpeg"], key="declaracao_escolar_b2")
                         
                         st.divider()
-                        # 🚨 ADICIONADO: BYPASS / ROTA DE FUGA
                         solicitar_rh_b2 = st.checkbox("⚠️ A IA rejeitou minha declaração escolar, quero enviá-la para análise visual e manual do RH.", key="rh_b2")
                         aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_b2")
                         aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_b2")
@@ -2302,10 +2358,11 @@ def interface():
                                     else:
                                         dados_decl_b2, err_decl_b2 = analisa_declaracao_escolar(declaracao_escolar_b2)
                                         decl_ok_b2 = False
+                                        motivo_reprova = None 
+
                                         if err_decl_b2:
                                             st.error(err_decl_b2)
                                         else:
-                                            # 🚨 ALTERADO: Recebe 3 retornos e aplica Lógica de Bypass
                                             decl_ok_b2, msg_decl_b2, status_rh_b2 = valida_declaracao_escolar(
                                                 dados_decl_b2, dados_cert.get("nome_crianca") or nome_filho_b2
                                             )
@@ -2316,6 +2373,7 @@ def interface():
                                                 if solicitar_rh_b2:
                                                     st.warning("⚠️ Declaração reprovada pela IA, mas o envio manual foi solicitado. O RH analisará visualmente.")
                                                     status_final_rh_b2 = "Revisão Manual (Bypass IA - Declaração B2)"
+                                                    motivo_reprova = msg_decl_b2
                                                     decl_ok_b2 = True
                                                 else:
                                                     st.error(msg_decl_b2)
@@ -2337,10 +2395,19 @@ def interface():
                                         else:
                                             db = SessionLocal()
                                             try:
-                                                nome_final_b2 = padroniza_texto(dados_cert.get("nome_crianca") or nome_filho_b2)
+                                                nome_extraido_b2 = dados_cert.get("nome_crianca", "")
+                                                nome_final_b2 = padroniza_texto(nome_extraido_b2) if nome_extraido_b2 else padroniza_texto(nome_filho_b2)
+                                                
                                                 if verificar_crianca_duplicada(db, nome_final_b2, data_nascimento_b2):
                                                     st.error("⚠️ Esta criança está no seu carrinho ou já possui um kit cadastrado.")
                                                 else:
+                                                    url_doc_b2 = None
+                                                    if solicitar_rh_b2:
+                                                        try:
+                                                            url_doc_b2 = upload_documento_supabase(declaracao_escolar_b2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                                        except Exception:
+                                                            url_doc_b2 = None
+
                                                     st.session_state.lista_dependentes.append({
                                                         "ID_Dependente": None,
                                                         "ID_Colaborador": st.session_state.colaborador['Crachá'],
@@ -2349,11 +2416,13 @@ def interface():
                                                         "Data_nascimento": data_nascimento_b2.strftime("%d/%m/%Y"),
                                                         "Escolaridade": st.session_state.escolaridade,
                                                         "Ano_escolar": st.session_state.ano_escolar,
-                                                        "revisao_rh": status_final_rh_b2, # 🚨 SALVA O STATUS COMBINADO
+                                                        "revisao_rh": status_final_rh_b2, 
                                                         "Fluxo_Documento": "B2 - Identidade + Certidão de Casamento",
                                                         "aceite_ia": aceite_ia,
                                                         "aceite_lgpd": aceite_lgpd,
-                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                        "motivo_reprova_ia": motivo_reprova,
+                                                        "url_documento": url_doc_b2
                                                     })
                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                     st.session_state.aguardando_decisao = True
@@ -2412,97 +2481,109 @@ def interface():
                         declaracao_escolar_c1 = st.file_uploader("Anexar Declaração Escolar de Matrícula 📚", type=["pdf", "png", "jpg", "jpeg"], key="declaracao_escolar_c1")
                         
                         st.divider()
-                        # 🚨 ADICIONADO: BYPASS / ROTA DE FUGA
                         solicitar_rh_c1 = st.checkbox("⚠️ A IA rejeitou minha declaração escolar, quero enviá-la para análise visual e manual do RH.", key="rh_c1")
                         aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_c1")
                         aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_c1")
                         salvar_c1 = st.form_submit_button("Validar e Adicionar ao Carrinho (C1)")
 
-                if salvar_c1:
-                    erros_c1 = []
-                    if not nome_filho_c1.strip(): erros_c1.append("O nome da criança é obrigatório.")
-                    if not genero_c1: erros_c1.append("O gênero é obrigatório.")
-                    if not st.session_state.escolaridade: erros_c1.append("A escolaridade é obrigatória.")
-                    if not st.session_state.ano_escolar: erros_c1.append("O ano escolar é obrigatório.")
-                    if not certidao_c1 or not termo_guarda_c1: erros_c1.append("Documento(s) ausente(s) ou ilegível(is)")
-                    if not declaracao_escolar_c1: erros_c1.append("A declaração escolar de matrícula é obrigatória.")
-                    if not aceite_ia or not aceite_lgpd: erros_c1.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
-                        
-                    if erros_c1:
-                        for e in erros_c1: st.error(f"⚠️ {e}")
-                    else:
-                        with st.spinner("Analisando documentos com a IA... Aguarde"):
-                            dados_cert_c1, err_cert_c1 = analisa_certidao(certidao_c1)
+                    if salvar_c1:
+                        erros_c1 = []
+                        if not nome_filho_c1.strip(): erros_c1.append("O nome da criança é obrigatório.")
+                        if not genero_c1: erros_c1.append("O gênero é obrigatório.")
+                        if not st.session_state.escolaridade: erros_c1.append("A escolaridade é obrigatória.")
+                        if not st.session_state.ano_escolar: erros_c1.append("O ano escolar é obrigatório.")
+                        if not certidao_c1 or not termo_guarda_c1: erros_c1.append("Documento(s) ausente(s) ou ilegível(is)")
+                        if not declaracao_escolar_c1: erros_c1.append("A declaração escolar de matrícula é obrigatória.")
+                        if not aceite_ia or not aceite_lgpd: erros_c1.append("Você deve aceitar os termos de uso de IA e a política de privacidade (LGPD) para prosseguir.")
                             
-                            if err_cert_c1:
-                                st.error(f"⚠️ {err_cert_c1}")
-                            else:
-                                dados_ok, msg_dados = valida_dados_crianca_certidao(
-                                    dados_cert_c1, nome_filho_c1, data_nascimento_c1, genero_c1
-                                )
-                                if not dados_ok:
-                                    st.error(msg_dados)
+                        if erros_c1:
+                            for e in erros_c1: st.error(f"⚠️ {e}")
+                        else:
+                            with st.spinner("Analisando documentos com a IA... Aguarde"):
+                                dados_cert_c1, err_cert_c1 = analisa_certidao(certidao_c1)
+                                
+                                if err_cert_c1:
+                                    st.error(f"⚠️ {err_cert_c1}")
                                 else:
-                                    dados_decl_c1, err_decl_c1 = analisa_declaracao_escolar(declaracao_escolar_c1)
-                                    decl_ok_c1 = False
-                                    if err_decl_c1:
-                                        st.error(err_decl_c1)
+                                    dados_ok, msg_dados = valida_dados_crianca_certidao(
+                                        dados_cert_c1, nome_filho_c1, data_nascimento_c1, genero_c1
+                                    )
+                                    if not dados_ok:
+                                        st.error(msg_dados)
                                     else:
-                                        # 🚨 ALTERADO: Recebe 3 retornos e aplica Lógica de Bypass
-                                        decl_ok_c1, msg_decl_c1, status_rh_c1 = valida_declaracao_escolar(
-                                            dados_decl_c1, dados_cert_c1.get("nome_crianca") or nome_filho_c1
-                                        )
+                                        dados_decl_c1, err_decl_c1 = analisa_declaracao_escolar(declaracao_escolar_c1)
+                                        decl_ok_c1 = False
+                                        motivo_reprova = None
                                         
-                                        status_final_rh_c1 = "Sim (Guarda Judicial C1)"
-
-                                        if not decl_ok_c1:
-                                            if solicitar_rh_c1:
-                                                st.warning("⚠️ Declaração reprovada pela IA, mas o envio manual foi solicitado. O RH analisará visualmente.")
-                                                status_final_rh_c1 = "Revisão Manual (Bypass IA - Declaração C1)"
-                                                decl_ok_c1 = True
-                                            else:
-                                                st.error(msg_decl_c1)
+                                        if err_decl_c1:
+                                            st.error(err_decl_c1)
                                         else:
-                                            st.success(msg_decl_c1)
-                                            if status_rh_c1 == "Sim (Validação Eletrônica)":
-                                                status_final_rh_c1 = "Sim (Validação Eletr. + Guarda C1)"
+                                            decl_ok_c1, msg_decl_c1, status_rh_c1 = valida_declaracao_escolar(
+                                                dados_decl_c1, dados_cert_c1.get("nome_crianca") or nome_filho_c1
+                                            )
+                                            
+                                            status_final_rh_c1 = "Sim (Guarda Judicial C1)"
 
-                                    if decl_ok_c1:
-                                        dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
-                                    else:
-                                        dados_guarda, err_guarda = None, "Declaração escolar inválida."
-                                        
-                                    if err_guarda:
-                                        if decl_ok_c1:
-                                            st.error(f"⚠️ {err_guarda}")
-                                    elif not dados_guarda.get("documento_valido"):
-                                        st.error("⚠️ O Termo de Guarda é inválido ou não pôde ser lido.")
-                                    else:
-                                        db = SessionLocal()
-                                        try:
-                                            nome_final_c1 = padroniza_texto(dados_cert_c1.get("nome_crianca", "")) or padroniza_texto(nome_filho_c1)
-                                            if verificar_crianca_duplicada(db, nome_final_c1, data_nascimento_c1):
-                                                st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
+                                            if not decl_ok_c1:
+                                                if solicitar_rh_c1:
+                                                    st.warning("⚠️ Declaração reprovada pela IA, mas o envio manual foi solicitado. O RH analisará visualmente.")
+                                                    status_final_rh_c1 = "Revisão Manual (Bypass IA - Declaração C1)"
+                                                    motivo_reprova = msg_decl_c1
+                                                    decl_ok_c1 = True
+                                                else:
+                                                    st.error(msg_decl_c1)
                                             else:
-                                                st.session_state.lista_dependentes.append({
-                                                    "ID_Dependente": None,
-                                                    "ID_Colaborador": st.session_state.colaborador['Crachá'],
-                                                    "Nome_filho": nome_final_c1,
-                                                    "Gênero": genero_c1,
-                                                    "Data_nascimento": data_nascimento_c1.strftime("%d/%m/%Y"),
-                                                    "Escolaridade": st.session_state.escolaridade,
-                                                    "Ano_escolar": st.session_state.ano_escolar,
-                                                    "revisao_rh": status_final_rh_c1, # 🚨 SALVA O STATUS COMBINADO
-                                                    "Fluxo_Documento": "C1 - Identidade + Guarda Judicial",
-                                                    "aceite_ia": aceite_ia,
-                                                    "aceite_lgpd": aceite_lgpd,
-                                                    "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                                })
-                                                st.success("✅ Dependente adicionado ao carrinho com sucesso!")
-                                                st.session_state.aguardando_decisao = True
-                                                st.rerun()
-                                        finally:
-                                            db.close()
+                                                st.success(msg_decl_c1)
+                                                if status_rh_c1 == "Sim (Validação Eletrônica)":
+                                                    status_final_rh_c1 = "Sim (Validação Eletr. + Guarda C1)"
+
+                                        if decl_ok_c1:
+                                            dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
+                                        else:
+                                            dados_guarda, err_guarda = None, "Declaração escolar inválida."
+                                            
+                                        if err_guarda:
+                                            if decl_ok_c1:
+                                                st.error(f"⚠️ {err_guarda}")
+                                        elif not dados_guarda.get("documento_valido"):
+                                            st.error("⚠️ O Termo de Guarda é inválido ou não pôde ser lido.")
+                                        else:
+                                            db = SessionLocal()
+                                            try:
+                                                nome_extraido_c1 = dados_cert_c1.get("nome_crianca", "")
+                                                nome_final_c1 = padroniza_texto(nome_extraido_c1) if nome_extraido_c1 else padroniza_texto(nome_filho_c1)
+                                                
+                                                if verificar_crianca_duplicada(db, nome_final_c1, data_nascimento_c1):
+                                                    st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
+                                                else:
+                                                    url_doc_c1 = None
+                                                    if solicitar_rh_c1:
+                                                        try:
+                                                            url_doc_c1 = upload_documento_supabase(declaracao_escolar_c1, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                                        except Exception:
+                                                            url_doc_c1 = None
+
+                                                    st.session_state.lista_dependentes.append({
+                                                        "ID_Dependente": None,
+                                                        "ID_Colaborador": st.session_state.colaborador['Crachá'],
+                                                        "Nome_filho": nome_final_c1,
+                                                        "Gênero": genero_c1,
+                                                        "Data_nascimento": data_nascimento_c1.strftime("%d/%m/%Y"),
+                                                        "Escolaridade": st.session_state.escolaridade,
+                                                        "Ano_escolar": st.session_state.ano_escolar,
+                                                        "revisao_rh": status_final_rh_c1, 
+                                                        "Fluxo_Documento": "C1 - Identidade + Guarda Judicial",
+                                                        "aceite_ia": aceite_ia,
+                                                        "aceite_lgpd": aceite_lgpd,
+                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                        "motivo_reprova_ia": motivo_reprova,
+                                                        "url_documento": url_doc_c1
+                                                    })
+                                                    st.success("✅ Dependente adicionado ao carrinho com sucesso!")
+                                                    st.session_state.aguardando_decisao = True
+                                                    st.rerun()
+                                            finally:
+                                                db.close()
 
                 # ==================== SUB-FLUXO C2: TUTELA JUDICIAL ====================
                 elif "C2" in sub_opcao_c:
@@ -2518,7 +2599,6 @@ def interface():
                         declaracao_escolar_c2 = st.file_uploader("Anexar Declaração Escolar de Matrícula 📚", type=["pdf", "png", "jpg", "jpeg"], key="declaracao_escolar_c2")
                         
                         st.divider()
-                        # 🚨 ADICIONADO: BYPASS / ROTA DE FUGA
                         solicitar_rh_c2 = st.checkbox("⚠️ A IA rejeitou minha declaração escolar, quero enviá-la para análise visual e manual do RH.", key="rh_c2")
                         aceite_ia = st.checkbox("Estou ciente de que os documentos enviados serão processados e analisados automaticamente por inteligência artificial para fins de validação cadastral.", key="ia_c2")
                         aceite_lgpd = st.checkbox("Concordo com o tratamento, armazenamento e uso dos dados para a concessão do Kit Escolar, em conformidade com a LGPD e as normas de compliance da instituição.", key="lgpd_c2")
@@ -2551,10 +2631,11 @@ def interface():
                                     else:
                                         dados_decl_c2, err_decl_c2 = analisa_declaracao_escolar(declaracao_escolar_c2)
                                         decl_ok_c2 = False
+                                        motivo_reprova = None
+                                        
                                         if err_decl_c2:
                                             st.error(err_decl_c2)
                                         else:
-                                            # 🚨 ALTERADO: Recebe 3 retornos e aplica Lógica de Bypass
                                             decl_ok_c2, msg_decl_c2, status_rh_c2 = valida_declaracao_escolar(
                                                 dados_decl_c2, dados_cert_c2.get("nome_crianca") or nome_filho_c2
                                             )
@@ -2565,6 +2646,7 @@ def interface():
                                                 if solicitar_rh_c2:
                                                     st.warning("⚠️ Declaração reprovada pela IA, mas o envio manual foi solicitado. O RH analisará visualmente.")
                                                     status_final_rh_c2 = "Revisão Manual (Bypass IA - Declaração C2)"
+                                                    motivo_reprova = msg_decl_c2
                                                     decl_ok_c2 = True
                                                 else:
                                                     st.error(msg_decl_c2)
@@ -2586,10 +2668,19 @@ def interface():
                                         else:
                                             db = SessionLocal()
                                             try:
-                                                nome_final_c2 = padroniza_texto(dados_cert_c2.get("nome_crianca", "")) or padroniza_texto(nome_filho_c2)
+                                                nome_extraido_c2 = dados_cert_c2.get("nome_crianca", "")
+                                                nome_final_c2 = padroniza_texto(nome_extraido_c2) if nome_extraido_c2 else padroniza_texto(nome_filho_c2)
+                                                
                                                 if verificar_crianca_duplicada(db, nome_final_c2, data_nascimento_c2):
                                                     st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
                                                 else:
+                                                    url_doc_c2 = None
+                                                    if solicitar_rh_c2:
+                                                        try:
+                                                            url_doc_c2 = upload_documento_supabase(declaracao_escolar_c2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                                        except Exception:
+                                                            url_doc_c2 = None
+
                                                     st.session_state.lista_dependentes.append({
                                                         "ID_Dependente": None,
                                                         "ID_Colaborador": st.session_state.colaborador['Crachá'],
@@ -2598,15 +2689,17 @@ def interface():
                                                         "Data_nascimento": data_nascimento_c2.strftime("%d/%m/%Y"),
                                                         "Escolaridade": st.session_state.escolaridade,
                                                         "Ano_escolar": st.session_state.ano_escolar,
-                                                        "revisao_rh": status_final_rh_c2, # 🚨 SALVA O STATUS COMBINADO
+                                                        "revisao_rh": status_final_rh_c2,
                                                         "Fluxo_Documento": "C2 - Identidade + Tutela Judicial",
                                                         "aceite_ia": aceite_ia,
                                                         "aceite_lgpd": aceite_lgpd,
-                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                                        "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                                        "motivo_reprova_ia": motivo_reprova,
+                                                        "url_documento": url_doc_c2
                                                     })
                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                     st.session_state.aguardando_decisao = True
                                                     st.rerun()
                                             finally:
                                                 db.close()
-interface()                                                
+interface()
