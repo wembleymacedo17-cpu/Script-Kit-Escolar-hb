@@ -2281,7 +2281,6 @@ def interface():
                     st.selectbox("Ano Escolar 2026", opcoes_ano[st.session_state.escolaridade], format_func=lambda x: "Selecione o Ano Escolar..." if x == "" else x, key="ano_escolar")
 
                 # --- FORMA B1 ---
-                # --- FORMA B1 ---
                 if "B1" in sub_opcao_b:
                     with st.form("form_fluxo_b1"):
                         st.info("📌 Requisitos: Envie a **Certidão de Nascimento ou RG da Criança** e a **Declaração de União Estável** com firma reconhecida.")
@@ -2523,6 +2522,14 @@ def interface():
                                 with st.spinner("Analisando documentos com a IA e cruzando certidão de casamento... Aguarde"):
                                     dados_cert, err_cert = analisa_certidao(certidao_b2)
                                     
+                                    # 🛡️ TRATAMENTO INTELIGENTE DE RG (Fallback)
+                                    if err_cert and ("não é" in err_cert.lower() or "certidao" in err_cert.lower() or "certidão" in err_cert.lower()):
+                                        dados_cert = {
+                                            "nome_crianca": nome_filho_b2,
+                                            "data_nascimento": data_nascimento_b2.strftime("%d/%m/%Y")
+                                        }
+                                        err_cert = None
+
                                     if err_cert:
                                         st.session_state.erro_ia_b2 = err_cert
                                         st.rerun()
@@ -2557,18 +2564,18 @@ def interface():
                                                         st.session_state.erro_ia_b2 = "A Certidão de Casamento é inválida ou não pôde ser lida."
                                                         st.rerun()
                                                     else:
-                                                        # Cruzamento: Colaborador deve constar na certidão de casamento
+                                                        # 🛡️ CRUZAMENTO ROBUSTO B2 (Varre todo o texto da certidão de casamento)
                                                         nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                                        cônjuges = [padroniza_texto(c) for c in [dados_casam.get("conjuge1"), dados_casam.get("conjuge2")] if c] 
-                                                        # Verificação genérica caso o retorno seja uma lista de cônjuges
-                                                        lista_conj = [padroniza_texto(x) for x in dados_casam.get("nomes_conjuge", [])]
-                                                        if not lista_conj:
-                                                            # Fallback combinando os campos individuais se existirem
-                                                            if dados_casam.get("conjuge1"): lista_conj.append(padroniza_texto(dados_casam.get("conjuge1")))
-                                                            if dados_casam.get("conjuge2"): lista_conj.append(padroniza_texto(dados_casam.get("conjuge2")))
+                                                        
+                                                        texto_casam_completo = " ".join([
+                                                            str(item) for v in dados_casam.values() 
+                                                            for item in (v if isinstance(v, list) else [v]) 
+                                                            if v is not None
+                                                        ])
+                                                        texto_casam_normalizado = padroniza_texto(texto_casam_completo)
 
-                                                        if lista_conj and nome_colab not in lista_conj:
-                                                            st.session_state.erro_ia_b2 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta na Certidão de Casamento informada."
+                                                        if nome_colab not in texto_casam_normalizado:
+                                                            st.session_state.erro_ia_b2 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado na Certidão de Casamento."
                                                             st.rerun()
                                                         else:
                                                             db = SessionLocal()
@@ -2717,6 +2724,14 @@ def interface():
                                 with st.spinner("Analisando documentos com a IA e cruzando termo de guarda... Aguarde"):
                                     dados_cert_c1, err_cert_c1 = analisa_certidao(certidao_c1)
                                     
+                                    # 🛡️ TRATAMENTO INTELIGENTE DE RG (Fallback)
+                                    if err_cert_c1 and ("não é" in err_cert_c1.lower() or "certidao" in err_cert_c1.lower() or "certidão" in err_cert_c1.lower()):
+                                        dados_cert_c1 = {
+                                            "nome_crianca": nome_filho_c1,
+                                            "data_nascimento": data_nascimento_c1.strftime("%d/%m/%Y")
+                                        }
+                                        err_cert_c1 = None
+
                                     if err_cert_c1:
                                         st.session_state.erro_ia_c1 = err_cert_c1
                                         st.rerun()
@@ -2751,11 +2766,18 @@ def interface():
                                                         st.session_state.erro_ia_c1 = "O Termo de Guarda é inválido ou não pôde ser lido."
                                                         st.rerun()
                                                     else:
-                                                        # Cruzamento: Nome do colaborador no Termo de Guarda Judicial
+                                                        # 🛡️ CRUZAMENTO ROBUSTO C1 (Varre todo o termo de guarda)
                                                         nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                                        guardioes = [padroniza_texto(g) for g in dados_guarda.get("guardioes", [])]
-                                                        if guardioes and nome_colab not in guardioes:
-                                                            st.session_state.erro_ia_c1 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como guardião(ã) no Termo de Guarda Judicial."
+                                                        
+                                                        texto_guarda_completo = " ".join([
+                                                            str(item) for v in dados_guarda.values() 
+                                                            for item in (v if isinstance(v, list) else [v]) 
+                                                            if v is not None
+                                                        ])
+                                                        texto_guarda_normalizado = padroniza_texto(texto_guarda_completo)
+
+                                                        if nome_colab not in texto_guarda_normalizado:
+                                                            st.session_state.erro_ia_c1 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado no Termo de Guarda Judicial."
                                                             st.rerun()
                                                         else:
                                                             db = SessionLocal()
@@ -2863,9 +2885,17 @@ def interface():
                                 finally:
                                     db.close()
                             else:
-                                with st.spinner("Analisando documentos com a IA e cruzando termo de tutela... Aguarde"):
+                               with st.spinner("Analisando documentos com a IA e cruzando termo de tutela... Aguarde"):
                                     dados_cert_c2, err_cert_c2 = analisa_certidao(certidao_c2)
                                     
+                                    # 🛡️ TRATAMENTO INTELIGENTE DE RG (Fallback)
+                                    if err_cert_c2 and ("não é" in err_cert_c2.lower() or "certidao" in err_cert_c2.lower() or "certidão" in err_cert_c2.lower()):
+                                        dados_cert_c2 = {
+                                            "nome_crianca": nome_filho_c2,
+                                            "data_nascimento": data_nascimento_c2.strftime("%d/%m/%Y")
+                                        }
+                                        err_cert_c2 = None
+
                                     if err_cert_c2:
                                         st.session_state.erro_ia_c2 = err_cert_c2
                                         st.rerun()
@@ -2900,11 +2930,18 @@ def interface():
                                                         st.session_state.erro_ia_c2 = "O Termo de Tutela é inválido ou não pôde ser lido."
                                                         st.rerun()
                                                     else:
-                                                        # Cruzamento: Nome do colaborador no Termo de Tutela Judicial
+                                                        # 🛡️ CRUZAMENTO ROBUSTO C2 (Varre todo o termo de tutela)
                                                         nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
-                                                        tutores = [padroniza_texto(t) for t in dados_tutela.get("tutores", [])]
-                                                        if tutores and nome_colab not in tutores:
-                                                            st.session_state.erro_ia_c2 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como tutor(a) no Termo de Tutela Judicial."
+                                                        
+                                                        texto_tutela_completo = " ".join([
+                                                            str(item) for v in dados_tutela.values() 
+                                                            for item in (v if isinstance(v, list) else [v]) 
+                                                            if v is not None
+                                                        ])
+                                                        texto_tutela_normalizado = padroniza_texto(texto_tutela_completo)
+
+                                                        if nome_colab not in texto_tutela_normalizado:
+                                                            st.session_state.erro_ia_c2 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado no Termo de Tutela Judicial."
                                                             st.rerun()
                                                         else:
                                                             db = SessionLocal()
