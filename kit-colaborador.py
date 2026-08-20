@@ -18,7 +18,8 @@ import time
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
 from conector_oracle import OracleConnector
 from conector_Postgre import SupabaseConnector
-from supabase import create_client,Client
+import boto3
+from botocore.exceptions import ClientError
 from notificador_email import NotificadorEmail, SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY, EMAIL_REMETENTE
 from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY
 
@@ -392,16 +393,17 @@ def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
     if not nome_pai and not nome_mae:
         return False, "❌ Não foi possível identificar os nomes dos pais no documento (se enviou RG, certifique-se de que o lado com a filiação está visível)."
 
-    nome_db   = padroniza_texto(nome_colaborador)
-    pai_cert  = padroniza_texto(nome_pai)
-    mae_cert  = padroniza_texto(nome_mae)
-
-    if nome_db == pai_cert:
+    # Usa a nova comparação inteligente para testar se é o pai
+    if compara_nomes_flexivel(nome_colaborador, nome_pai):
         return True, f"✅ Nome confere com o pai: {nome_pai}"
-    if nome_db == mae_cert:
+        
+    # Usa a nova comparação inteligente para testar se é a mãe
+    if compara_nomes_flexivel(nome_colaborador, nome_mae):
         return True, f"✅ Nome confere com a mãe: {nome_mae}"
 
-    return False, None
+    # Retorna o erro detalhado 
+    erro_msg = f"❌ O nome do colaborador ({nome_colaborador}) não confere com a filiação extraída: (Pai: {nome_pai or 'Não consta'} | Mãe: {nome_mae or 'Não consta'})."
+    return False, erro_msg
 
 
 def executar_gemini_com_fallback(contents_data, config_schema, status_spinner=None, tentativas_por_modelo=2):
@@ -1066,6 +1068,56 @@ def padroniza_texto(texto):
     texto = re.sub(r'\s+', ' ', texto)       # Remove espaços duplos
     return texto
 
+def compara_nomes_flexivel(nome_a: str, nome_b: str) -> bool:
+    """
+    Compara dois nomes aceitando sobrenomes extras (casamento) e abreviações, 
+    sem comprometer a segurança.
+    """
+    if not nome_a or not nome_b:
+        return False
+
+    # Lista de preposições comuns para descartar da comparação
+    preposicoes = {"DE", "DA", "DO", "DAS", "DOS", "E"}
+
+    def extrai_tokens(nome):
+        # Usa a sua função padroniza_texto para tirar acentos e deixar maiúsculo
+        nome_limpo = padroniza_texto(nome)
+        return [p for p in nome_limpo.split() if p not in preposicoes]
+
+    tokens_a = extrai_tokens(nome_a)
+    tokens_b = extrai_tokens(nome_b)
+
+    if not tokens_a or not tokens_b:
+        return False
+
+    # REGRA DE OURO DA SEGURANÇA: O primeiro nome TEM que bater ou ser compatível.
+    # Ex: 'LUCILENE' == 'LUCILENE'
+    def token_compativel(t1, t2):
+        if t1 == t2: return True
+        if len(t1) == 1 and t2.startswith(t1): return True
+        if len(t2) == 1 and t1.startswith(t2): return True
+        return False
+
+    if not token_compativel(tokens_a[0], tokens_b[0]):
+        return False
+
+    # REGRA DE SOBRENOME: Conta quantos tokens de 'A' batem com tokens de 'B'
+    matches = 0
+    for ta in tokens_a:
+        for tb in tokens_b:
+            if token_compativel(ta, tb):
+                matches += 1
+                break  # Bateu um, vai para o próximo token de 'A'
+
+    # Se bateu o primeiro nome e pelo menos mais um sobrenome (matches >= 2), 
+    # OU se um nome for muito curto e estiver 100% contido no outro, é a mesma pessoa.
+    tamanho_menor = min(len(tokens_a), len(tokens_b))
+    
+    if matches >= 2 or matches == tamanho_menor:
+        return True
+
+    return False
+
 def valida_telefone(telefone):
     """
     Valida telefone brasileiro (celular ou fixo).
@@ -1225,8 +1277,11 @@ def valida_dados_crianca_certidao(dados_certidao: dict, nome_informado: str, dat
 
 
 def catalogo_kits_por_escolaridade():
-    # URL pública do Storage no Supabase
-    BASE_URL = "https://shmjscmivtujhrcjeicn.supabase.co/storage/v1/object/public/imagens/"
+    BASE_URL = os.getenv("BASE_URL_IMAGENS_KITS")
+    
+    if not BASE_URL:
+        st.error("⚠️ A variável `BASE_URL_IMAGENS_KITS` não está configurada no arquivo .env!")
+        return {}, ""
     
     kits_infantil = ["Dinossauro", "Abelha", "Borboleta", "Unicornio", "Cachorro"]
     kits_efi = [f"EFI-{i}" for i in range(1, 12)]
@@ -1240,7 +1295,6 @@ def catalogo_kits_por_escolaridade():
         "Ensino Médio": kits_em,
         "Ensino Superior / Técnico": kits_em
     }, BASE_URL
-
 
 def escolher_kits_colaborador():
     st.divider()
@@ -1447,78 +1501,89 @@ def gerar_qrcode(conteudo_qrcode):
 
 
 
+def _get_s3_client():
+    """Instancia o client do S3 usando as credenciais do arquivo .env."""
+    return boto3.client(
+        "s3",
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        region_name=os.getenv("AWS_REGION"),
+    )
+
+
 def upload_documento_supabase(arquivo_buffer, tipo_documento, cracha) -> str | None:
-    """Faz upload do documento de revisão para o bucket do Supabase."""
-    
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+    """Faz upload do documento de revisão para o bucket S3 (AWS)."""
+
     BASE_URL_DOCUMENTO_ANALISE = os.getenv("BASE_URL_DOCUMENTO_ANALISE")
-    
-    # Instancia o client da mesma forma segura que o QR Code faz
-    supabase_storage = create_client(SUPABASE_URL, SUPABASE_KEY)
-    BUCKET_DOCS = "Documentos_Revisao"
+    BUCKET_DOCS = os.getenv("S3_BUCKET_DOCS")
+
+    s3_client = _get_s3_client()
 
     # Gera o nome seguindo o padrão exigido
     hash_curto = uuid.uuid4().hex[:6]
     extensao = arquivo_buffer.name.split('.')[-1]
     nome_arquivo = f"{tipo_documento}-{cracha}-{hash_curto}.{extensao}"
-    
+
     arquivo_buffer.seek(0)
-    
+
     try:
-        supabase_storage.storage.from_(BUCKET_DOCS).upload(
-            path=nome_arquivo,
-            file=arquivo_buffer.read(),
-            file_options={"content-type": arquivo_buffer.type, "upsert": "true"}
+        s3_client.put_object(
+            Bucket=BUCKET_DOCS,
+            Key=nome_arquivo,
+            Body=arquivo_buffer.read(),
+            ContentType=arquivo_buffer.type,
         )
-        
+
         # Retorna a URL montada perfeitamente usando a variável do .env
         return f"{BASE_URL_DOCUMENTO_ANALISE}{nome_arquivo}"
-        
-    except Exception as e:
-        print(f"❌ Erro ao salvar documento no bucket do Supabase: {e}")
+
+    except ClientError as e:
+        print(f"❌ Erro ao salvar documento no bucket S3: {e}")
         return None
     finally:
         arquivo_buffer.seek(0)
 def salvar_qrcode_bucket(buffer_qrcode: BytesIO, cracha: str) -> str | None:
-    """Faz upload do QR Code para o bucket do Supabase, usando o crachá como nome do arquivo."""
+    """Faz upload do QR Code para o bucket S3 (AWS), usando o crachá como nome do arquivo."""
 
-    SUPABASE_URL = os.getenv("SUPABASE_URL") 
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
-    BASE_URL_QRCODE = os.getenv("BASE_URL_QRCODE") 
+    BASE_URL_QRCODE = os.getenv("BASE_URL_QRCODE")
+    BUCKET_QRCODES = os.getenv("S3_BUCKET_QRCODES")
 
-    
-    supabase_storage = create_client(SUPABASE_URL, SUPABASE_KEY)
-    BUCKET_QRCODES = "QRCODE"
+    s3_client = _get_s3_client()
 
     nome_arquivo = f"{cracha}.png"
     buffer_qrcode.seek(0)
-    
+
     try:
-        supabase_storage.storage.from_(BUCKET_QRCODES).upload(
-            path=nome_arquivo,
-            file=buffer_qrcode.read(),
-            file_options={"content-type": "image/png", "upsert": "true"}
+        s3_client.put_object(
+            Bucket=BUCKET_QRCODES,
+            Key=nome_arquivo,
+            Body=buffer_qrcode.read(),
+            ContentType="image/png",
         )
         # Monta o link perfeitamente: url_pasta + nome_do_arquivo
         return f"{BASE_URL_QRCODE}{nome_arquivo}"
-        
-    except Exception as e:
-        print(f"❌ Erro ao salvar QR Code no bucket do Supabase: {e}")
+
+    except ClientError as e:
+        print(f"❌ Erro ao salvar QR Code no bucket S3: {e}")
         return None
     finally:
         buffer_qrcode.seek(0)
 
 
-def enviar_qrcode_por_email(email_destino: str, buffer_qrcode: BytesIO, cracha: str) -> bool:
-    """Envia o QR Code de retirada por e-mail ao colaborador."""
+def enviar_qrcode_por_email(email_destino: str, buffer_qrcode: BytesIO, cracha: str, codigo_retirada: str) -> bool:
+    """Envia o QR Code de retirada por e-mail ao colaborador, junto com o código de retirada."""
     notificador = NotificadorEmail(SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY)
     remetente = EMAIL_REMETENTE if EMAIL_REMETENTE else LOGIN_SMTP
     sucesso = notificador.disparar(
         remetente=remetente,
         destinatarios=email_destino,
         assunto="Seu QR Code - Retirada do Kit Escolar Funfarme",
-        corpo="Olá! Segue em anexo o QR Code para retirada do seu Kit Escolar.",
+        corpo=(
+            "Olá! Segue em anexo o QR Code para retirada do seu Kit Escolar.\n\n"
+            f"Código de retirada: {codigo_retirada}\n\n"
+            "Caso não seja possível apresentar o QR Code no momento da retirada, "
+            "este código também pode ser informado."
+        ),
         anexo=buffer_qrcode,
         nome_anexo=f"qrcode_retirada_{cracha}.png"
     )
@@ -1622,7 +1687,7 @@ def exibir_qrcode_final():
             salvar_qrcode_bucket(imagem_qrcode, cracha)
             
             # Dispara o Email
-            sucesso_email = enviar_qrcode_por_email(retirada["Email"], imagem_qrcode, cracha)
+            sucesso_email = enviar_qrcode_por_email(retirada["Email"], imagem_qrcode, cracha, retirada["Codigo_Retirada"])
             
             if sucesso_email:
                 st.success("✅ Cópia enviada para o seu e-mail!")
@@ -2974,4 +3039,4 @@ def interface():
                                                                     st.rerun()
                                                             finally:
                                                                 db.close()
-interface()                                                              
+interface()

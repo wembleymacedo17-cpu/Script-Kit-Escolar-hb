@@ -1,4 +1,4 @@
-# Bibliotecas Gerais e de Dados
+
 pandas
 python-dotenv
 google-genai
@@ -13,4 +13,4 @@ pydantic
 sqlalchemy
 psycopg2-binary
 oracledb
-supabase
+boto3
