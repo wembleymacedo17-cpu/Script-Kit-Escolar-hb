@@ -78,8 +78,6 @@ class EscolhaKit(Base):
     id_dependente = Column(Integer, ForeignKey("dependentes.id_dependente", ondelete="CASCADE"), nullable=False)
     kit_escolhido = Column(String(150), nullable=False)
     data_escolha = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    # 🚨 NOVAS COLUNAS: ciência sobre variação de cor/acabamento e estoque do kit
     aceite_variacao_kit = Column(Boolean, default=False)
     data_aceite_variacao = Column(DateTime, nullable=True)
 
