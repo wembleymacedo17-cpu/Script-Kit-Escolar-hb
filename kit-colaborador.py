@@ -900,6 +900,9 @@ def editar_kits_existentes(id_colaborador):
     try:
         dependentes = db.query(Dependente).filter(Dependente.id_colaborador == id_colaborador).all()
         catalogo, base_url = catalogo_kits_por_escolaridade()
+        if not base_url:
+            st.error("⚠️ Erro crítico: A variável `BASE_URL_IMAGENS_KITS` não está definida no arquivo .env.")
+            return None
         
         # Injeção de CSS para padronizar altura das imagens do catálogo
         st.markdown("""
