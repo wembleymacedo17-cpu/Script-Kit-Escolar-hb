@@ -56,6 +56,8 @@ class Dependente(Base):
     ano_escola = Column(String(50))
     data_cadastro = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     revisao_rh = Column(String(50))
+    motivo_reprova_ia = Column(String, nullable=True)
+    url_documento = Column(String, nullable=True)
 
     # 🔒 NOVAS COLUNAS DE COMPLIANCE
     aceite_ia = Column(Boolean, default=False)
