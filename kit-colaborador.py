@@ -14,6 +14,7 @@ from io import BytesIO
 import uuid
 from datetime import datetime
 import time 
+from rate_limiter import verificar_limite_clique
 # ==================== IMPORTS DO BANCO ====================
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
 from conector_oracle import OracleConnector
@@ -756,6 +757,9 @@ def adicionar_dependentes():
         salvar = st.form_submit_button("📁 Adicionar ao Carrinho")
 
     if not salvar:
+        return None
+
+    if not verificar_limite_clique("valida_dependente", 5):
         return None
 
     erros = []
@@ -1956,6 +1960,8 @@ def interface():
                 salvar_est = st.form_submit_button("Validar e Adicionar ao Carrinho")
 
             if salvar_est:
+                if not verificar_limite_clique("valida_estagiario", 5):
+                    st.stop()
                 erros_est = []
                 if not genero_est: erros_est.append("O gênero é obrigatório.")
                 if not st.session_state.escolaridade: erros_est.append("A escolaridade é obrigatória.")
@@ -2076,6 +2082,8 @@ def interface():
                             salvar_a2 = st.form_submit_button("Validar e Adicionar ao Carrinho (A2)")
 
                         if salvar_a2:
+                            if not verificar_limite_clique("valida_a2", 5):
+                                st.stop()
                             erros_a2 = []
                             if not nome_filho_a2.strip(): erros_a2.append("O nome da criança é obrigatório.")
                             if not genero_a2: erros_a2.append("O gênero é obrigatório.")
@@ -2216,6 +2224,8 @@ def interface():
                             salvar_a3 = st.form_submit_button("Validar e Adicionar ao Carrinho (A3)")
 
                         if salvar_a3:
+                            if not verificar_limite_clique("valida_a3", 5):
+                                st.stop()
                             erros_a3 = []
                             if not nome_filho_a3.strip(): erros_a3.append("O nome da criança é obrigatório.")
                             if not st.session_state.escolaridade: erros_a3.append("A escolaridade é obrigatória.")
@@ -2372,6 +2382,8 @@ def interface():
                         salvar_b1 = st.form_submit_button("Validar e Adicionar ao Carrinho (B1)")
 
                     if salvar_b1:
+                        if not verificar_limite_clique("valida_b1", 5):
+                            st.stop()
                         erros_b = []
                         if not nome_filho_b.strip(): erros_b.append("O nome da criança é obrigatório.")
                         if not genero_b: erros_b.append("O gênero é obrigatório.")
@@ -2536,6 +2548,8 @@ def interface():
                         salvar_b2 = st.form_submit_button("Validar e Adicionar ao Carrinho (B2)")
 
                     if salvar_b2:
+                        if not verificar_limite_clique("valida_b2", 5):
+                            st.stop()
                         erros_b2 = []
                         if not nome_filho_b2.strip(): erros_b2.append("O nome da criança é obrigatório.")
                         if not genero_b2: erros_b2.append("O gênero é obrigatório.")
@@ -2739,6 +2753,8 @@ def interface():
                         salvar_c1 = st.form_submit_button("Validar e Adicionar ao Carrinho (C1)")
 
                     if salvar_c1:
+                        if not verificar_limite_clique("valida_c1", 5):
+                            st.stop()
                         erros_c1 = []
                         if not nome_filho_c1.strip(): erros_c1.append("O nome da criança é obrigatório.")
                         if not genero_c1: erros_c1.append("O gênero é obrigatório.")
@@ -2903,6 +2919,8 @@ def interface():
                         salvar_c2 = st.form_submit_button("Validar e Adicionar ao Carrinho (C2)")
 
                     if salvar_c2:
+                        if not verificar_limite_clique("valida_c2", 5):
+                            st.stop()
                         erros_c2 = []
                         if not nome_filho_c2.strip(): erros_c2.append("O nome da criança é obrigatório.")
                         if not genero_c2: erros_c2.append("O gênero é obrigatório.")
