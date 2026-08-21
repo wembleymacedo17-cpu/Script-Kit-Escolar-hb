@@ -1,9 +1,11 @@
 import os
 from datetime import datetime, timezone
+import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
+
 
 # ===================== CONFIGURAÇÃO =====================
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -42,6 +44,10 @@ class Colaborador(Base):
     criado_em = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     situacao = Column(Integer)
 
+    # 🔒 COLUNAS TOTP
+    totp_secret = Column(String(32), nullable=True)
+    totp_ativo = Column(Boolean, default=False)
+
     dependentes = relationship("Dependente", back_populates="colaborador", cascade="all, delete-orphan")
 
 
@@ -59,12 +65,12 @@ class Dependente(Base):
     motivo_reprova_ia = Column(String, nullable=True)
     url_documento = Column(String, nullable=True)
 
-    # 🔒 NOVAS COLUNAS DE COMPLIANCE
+    # 🔒 COLUNAS DE COMPLIANCE
     aceite_ia = Column(Boolean, default=False)
     aceite_lgpd = Column(Boolean, default=False)
     data_aceite = Column(DateTime, nullable=True)
 
-    # 🚨 ADICIONADO: Coluna para registrar o fluxo e documento utilizado
+    # Registro de fluxo e documento
     fluxo_documento = Column(Text, nullable=True)
 
     colaborador = relationship("Colaborador", back_populates="dependentes")
@@ -102,7 +108,8 @@ class Retirada(Base):
     __table_args__ = (CheckConstraint("status IN ('PENDENTE', 'ENTREGUE')", name='chk_status_retirada'),)
 
 
-# ===================== FUNÇÕES =====================
+# ===================== FUNÇÕES E MÉTODOS =====================
+
 def get_db():
     db = SessionLocal()
     try:
@@ -112,9 +119,66 @@ def get_db():
 
 
 def init_db():
-    """Cria as tabelas no banco"""
+    """Cria as tabelas no banco de dados"""
     Base.metadata.create_all(bind=engine)
     print("✅ Tabelas criadas ou já existentes.")
+
+
+def atualizar_colaboradores_merge(engine_db, df_oracle: pd.DataFrame):
+    """
+    Carrega os dados do Oracle mantendo os campos de TOTP intactos no Postgres.
+    """
+    try:
+        # 1. Carrega dados do Oracle na tabela temporária de Staging
+        df_oracle.to_sql(
+            name='stg_colaboradores',
+            con=engine_db,
+            if_exists='replace',
+            index=False,
+            chunksize=10000,
+            method='multi'
+        )
+        
+        # 2. Executa MERGE (UPSERT) da Staging para a Tabela Principal 'colaboradores'
+        query_upsert = """
+            INSERT INTO colaboradores (
+                cracha, 
+                nome, 
+                descricao_situacao, 
+                titulo_reduzido_cargo, 
+                data_demissao, 
+                situacao, 
+                totp_secret, 
+                totp_ativo
+            )
+            SELECT 
+                s.cracha, 
+                s.nome, 
+                s.descricao_situacao, 
+                s.titulo_reduzido_cargo, 
+                s.data_demissao, 
+                s.situacao,
+                NULL AS totp_secret,
+                FALSE AS totp_ativo
+            FROM stg_colaboradores s
+            ON CONFLICT (cracha) DO UPDATE SET
+                nome = EXCLUDED.nome,
+                descricao_situacao = EXCLUDED.descricao_situacao,
+                titulo_reduzido_cargo = EXCLUDED.titulo_reduzido_cargo,
+                data_demissao = EXCLUDED.data_demissao,
+                situacao = EXCLUDED.situacao;
+            
+            -- Limpa a tabela temporária após a sincronização
+            DROP TABLE IF EXISTS stg_colaboradores;
+        """
+        
+        with engine_db.begin() as conn:
+            conn.execute(text(query_upsert))
+        print("✅ Tabela 'colaboradores' sincronizada com sucesso mantendo os dados de TOTP!")
+
+    except Exception as e:
+        print(f"❌ Erro ao realizar o MERGE dos colaboradores: {e}")
+        raise e
 
 
 if __name__ == "__main__":

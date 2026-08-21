@@ -23,6 +23,9 @@ import boto3
 from botocore.exceptions import ClientError
 from notificador_email import NotificadorEmail, SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY, EMAIL_REMETENTE
 from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY, TAMANHO_MAXIMO_MB,EXTENSOES_PERMITIDAS
+from autenticacao_totp import verificar_autenticacao_totp
+
+
 
 
 load_dotenv()
@@ -570,6 +573,7 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
     
     supabase_connector = SupabaseConnector()
     try:
+        # 🔍 ADICIONADAS AS COLUNAS DO TOTP NA QUERY
         query_banco = f"""
         SELECT 
             cracha,
@@ -577,50 +581,49 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             descricao_situacao,
             titulo_reduzido_cargo,
             id_cargo,
-            data_demissao
+            data_demissao,
+            totp_secret,
+            totp_ativo
         FROM colaboradores
         WHERE cracha = {cracha_numero}
         """
         df = pd.read_sql(query_banco, supabase_connector.engine)
         colaborador = df.to_dict(orient="records")[0] if not df.empty else None
-        if colaborador:
-            print(f"DEBUG -> id_cargo bruto: {repr(colaborador['id_cargo'])} | tipo: {type(colaborador['id_cargo'])}")
         
         if not colaborador:
             st.error("⚠️ Crachá não encontrado na base de dados.")
-            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
+            st.session_state.colaborador = None  
             return None
             
         if colaborador["descricao_situacao"] in situacoes_invalidas:
             st.error(f"⚠️ Colaborador não elegível. Situação atual: {colaborador['descricao_situacao']}")
-            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
+            st.session_state.colaborador = None  
             return None
 
-        # ==================== NOVA VALIDAÇÃO DE CARGOS REJEITADOS ====================
         if str(colaborador["id_cargo"]) in CARGOS_REJEIATO:
             st.error(
                 "🎁 O Kit Escolar é uma iniciativa de apoio social direcionada a categorias específicas "
                 "da nossa instituição e, por isso, não está disponível para o seu cargo. "
                 "Agradecemos muito pela compreensão!"
             )
-            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
+            st.session_state.colaborador = None  
             return None
             
-        # ==================== SALVA NO SESSION_STATE ====================
+        # ==================== SALVA NO SESSION_STATE COM TODAS AS CHAVES ====================
         st.session_state.colaborador = {
             "id": colaborador["cracha"],
+            "cracha": colaborador["cracha"],            
             "Crachá": colaborador["cracha"],
             "Nome": colaborador["nome"],
+            "nome": colaborador["nome"],                
             "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
             "Descrição (Situação)": colaborador["descricao_situacao"],
-            "id_cargo": int(colaborador["id_cargo"]) if colaborador.get("id_cargo") else None
+            "id_cargo": int(colaborador["id_cargo"]) if colaborador.get("id_cargo") else None,
+            "totp_secret": colaborador.get("totp_secret"),     # 👈 Estado do TOTP do banco
+            "totp_ativo": colaborador.get("totp_ativo", False) # 👈 Status do TOTP do banco
         }
         
-        st.divider()
-        st.subheader("📋 Ficha do Colaborador")
-        st.text_input("Nome Completo", value=colaborador['nome'], disabled=True)
-        st.text_input("Cargo", value=colaborador['titulo_reduzido_cargo'] or "", disabled=True)
-        st.text_input("Situação", value=colaborador['descricao_situacao'] or "", disabled=True)
+
         
         return st.session_state.colaborador
         
@@ -789,9 +792,7 @@ def adicionar_dependentes():
             st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
             return None
 
-        # =========================================================
-        # 💡 CURTO-CIRCUITO: SE O USUÁRIO JÁ MARCOU BYPASS, PULA A IA!
-        # =========================================================
+   
         if forcar_envio_rh:
             with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
                 cracha_colab = st.session_state.colaborador['Crachá']
@@ -1746,6 +1747,9 @@ def exibir_qrcode_final():
 
 
 #------------------------------------------------------------PAINEL DE CONTROLE------------------------------------------------------------------------
+# ============================================================
+# CÓDIGO CORRIGIDO DA FUNÇÃO INTERFACE
+# ============================================================
 def interface():
     st.set_page_config(page_title='Funfarme - Kit Escolar', page_icon='🎒', layout="wide")
     st.title('🎒 Funfarme - Kit Escolar')
@@ -1759,6 +1763,8 @@ def interface():
     # Inicializa todos os estados necessários ---
     if 'colaborador' not in st.session_state:
         st.session_state.colaborador = None
+    if 'autenticado_totp' not in st.session_state:
+        st.session_state.autenticado_totp = False    
     if 'contato' not in st.session_state:
         st.session_state.contato = None
     if 'tipo_fluxo' not in st.session_state:
@@ -1831,13 +1837,31 @@ def interface():
 
     # ===================== FASE 1: BUSCA E CONTATO =====================
     if st.session_state.contato is None:
-        st.write('Informe seu crachá e clique em Buscar Colaborador.')
         
-        colaborador = busca_colaborador()
-        if colaborador is not None:
-            st.session_state.colaborador = colaborador
+        # 1. Se ainda não buscou o colaborador, mostra o formulário de busca
+        if st.session_state.colaborador is None:
+            st.write('Informe seu crachá e clique em Buscar Colaborador.')
+            colaborador = busca_colaborador()
+            if colaborador is not None:
+                st.session_state.colaborador = colaborador
+                st.rerun() # Recarrega para sumir com o formulário de busca imediatamente
+            return
 
-        if st.session_state.colaborador is not None:
+        # 2. Colaborador encontrado, mas AINDA NÃO AUTENTICADO NO 2FA
+        if st.session_state.colaborador is not None and not st.session_state.get("autenticado_totp", False):
+            if verificar_autenticacao_totp(st.session_state.colaborador, SessionLocal().bind):
+                st.session_state.autenticado_totp = True
+                st.rerun() # Recarrega a tela após digitar o código correto
+            st.stop() # Pausa a renderização aqui para não mostrar a ficha antes da hora
+
+        # 3. AUTENTICADO COM SUCESSO! Agora sim a Ficha e o Contato aparecem na tela
+        if st.session_state.colaborador is not None and st.session_state.get("autenticado_totp", False):
+            st.divider()
+            st.subheader("📋 Ficha do Colaborador")
+            st.text_input("Nome Completo", value=st.session_state.colaborador['Nome'], disabled=True)
+            st.text_input("Cargo", value=st.session_state.colaborador['Título Reduzido (Cargo)'] or "", disabled=True)
+            st.text_input("Situação", value=st.session_state.colaborador['Descrição (Situação)'] or "", disabled=True)
+
             if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
                 db = SessionLocal()
                 try:
