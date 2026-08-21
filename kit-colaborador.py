@@ -22,7 +22,7 @@ from conector_Postgre import SupabaseConnector
 import boto3
 from botocore.exceptions import ClientError
 from notificador_email import NotificadorEmail, SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY, EMAIL_REMETENTE
-from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY
+from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY, TAMANHO_MAXIMO_MB,EXTENSOES_PERMITIDAS
 
 
 load_dotenv()
@@ -761,6 +761,12 @@ def adicionar_dependentes():
 
     if not verificar_limite_clique("valida_dependente", 5):
         return None
+    
+    # 🎯 CORREÇÃO CRÍTICA DO BARRAMENTO: Valida e paralisa a execução IMEDIATAMENTE antes de testar erros do form ou banco
+    valido_cert = validar_arquivo(certidao, "Certidão/RG da Criança")
+    valido_decl = validar_arquivo(declaracao_escolar, "Declaração Escolar")
+    if not (valido_cert and valido_decl):
+        st.stop()  # Impede a continuidade do processamento do formulário no Streamlit
 
     erros = []
     if not nome_filho.strip(): erros.append("❌ Nome da criança é obrigatório.")
@@ -1122,8 +1128,41 @@ def compara_nomes_flexivel(nome_a: str, nome_b: str) -> bool:
     
     if matches >= 2 or matches == tamanho_menor:
         return True
-
     return False
+
+
+
+
+
+def validar_arquivo(arquivo, nome_campo: str) -> bool:
+    """
+    Valida se o arquivo enviado atende aos critérios de tamanho e formato.
+    Retorna True se estiver válido e False se houver violação.
+    """
+    if arquivo is None:
+        return True
+
+    # 1. Validação de Tamanho (convertendo bytes para MB)
+    tamanho_mb = arquivo.size / (1024 * 1024)
+    if tamanho_mb > TAMANHO_MAXIMO_MB:
+        st.error(
+            f"⚠️ O arquivo anexado no campo **'{nome_campo}'** excede o limite permitido de {TAMANHO_MAXIMO_MB} MB "
+            f"(Tamanho atual: {tamanho_mb:.1f} MB). Por favor, reduza o tamanho do arquivo."
+        )
+        return False
+
+    # 2. Validação de Extensão
+    extensao = arquivo.name.split(".")[-1].lower()
+    if extensao not in EXTENSOES_PERMITIDAS:
+        st.error(
+            f"⚠️ Formato inválido no campo **'{nome_campo}'**. "
+            f"Formatos aceitos: {', '.join(EXTENSOES_PERMITIDAS).upper()}."
+        )
+        return False
+
+    return True
+
+
 
 def valida_telefone(telefone):
     """
@@ -1962,6 +2001,10 @@ def interface():
             if salvar_est:
                 if not verificar_limite_clique("valida_estagiario", 5):
                     st.stop()
+                valido_cert = validar_arquivo(certidao_est, "Certidão/RG do Estagiário")
+                if not valido_cert:
+                    st.stop()
+
                 erros_est = []
                 if not genero_est: erros_est.append("O gênero é obrigatório.")
                 if not st.session_state.escolaridade: erros_est.append("A escolaridade é obrigatória.")
@@ -2083,6 +2126,10 @@ def interface():
 
                         if salvar_a2:
                             if not verificar_limite_clique("valida_a2", 5):
+                                st.stop()
+                            valido_cert = validar_arquivo(certidao_averbada, "Certidão com Averbação")
+                            valido_decl = validar_arquivo(declaracao_escolar_a2, "Declaração Escolar")
+                            if not (valido_cert and valido_decl):
                                 st.stop()
                             erros_a2 = []
                             if not nome_filho_a2.strip(): erros_a2.append("O nome da criança é obrigatório.")
@@ -2226,6 +2273,10 @@ def interface():
                         if salvar_a3:
                             if not verificar_limite_clique("valida_a3", 5):
                                 st.stop()
+                            valido_doc = validar_arquivo(doc_judicial, "Documento Judicial")
+                            if not valido_doc:
+                                st.stop()
+
                             erros_a3 = []
                             if not nome_filho_a3.strip(): erros_a3.append("O nome da criança é obrigatório.")
                             if not st.session_state.escolaridade: erros_a3.append("A escolaridade é obrigatória.")
@@ -2365,8 +2416,6 @@ def interface():
                         nome_filho_b = st.text_input("Nome Completo da Criança")
                         genero_b = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
                         data_nascimento_b = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=date.today() - timedelta(days=730), format="DD/MM/YYYY")
-                        
-                        # 📝 Rótulo atualizado para explicitar que aceita ambos os documentos
                         certidao_b = st.file_uploader("Anexar Certidão de Nascimento ou RG da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_b1", help="Aceita Certidão de Nascimento ou RG (com a filiação/verso visível).")
                         uniao_b = st.file_uploader("Anexar União Estável (com firma reconhecida e Selo do Cartório)", type=["pdf", "png", "jpg", "jpeg"], key="doc_b1")
                         declaracao_escolar_b1 = st.file_uploader("Anexar Declaração Escolar de Matrícula 📚", type=["pdf", "png", "jpg", "jpeg"], key="declaracao_escolar_b1")
@@ -2384,6 +2433,14 @@ def interface():
                     if salvar_b1:
                         if not verificar_limite_clique("valida_b1", 5):
                             st.stop()
+                        # --- INÍCIO DA VALIDAÇÃO DE ARQUIVOS ---
+                        valido_cert = validar_arquivo(certidao_b, "Certidão/RG da Criança")
+                        valido_uniao = validar_arquivo(uniao_b, "Declaração de União Estável")
+                        valido_decl = validar_arquivo(declaracao_escolar_b1, "Declaração Escolar")  
+
+                        if not (valido_cert and valido_uniao and valido_decl):
+                            st.stop()  
+                            
                         erros_b = []
                         if not nome_filho_b.strip(): erros_b.append("O nome da criança é obrigatório.")
                         if not genero_b: erros_b.append("O gênero é obrigatório.")
@@ -2550,6 +2607,12 @@ def interface():
                     if salvar_b2:
                         if not verificar_limite_clique("valida_b2", 5):
                             st.stop()
+                        valido_cert = validar_arquivo(certidao_b2, "Certidão/RG da Criança")
+                        valido_casam = validar_arquivo(casamento_b2, "Certidão de Casamento")
+                        valido_decl = validar_arquivo(declaracao_escolar_b2, "Declaração Escolar")
+                        if not (valido_cert and valido_casam and valido_decl):
+                            st.stop()
+
                         erros_b2 = []
                         if not nome_filho_b2.strip(): erros_b2.append("O nome da criança é obrigatório.")
                         if not genero_b2: erros_b2.append("O gênero é obrigatório.")
@@ -2753,8 +2816,14 @@ def interface():
                         salvar_c1 = st.form_submit_button("Validar e Adicionar ao Carrinho (C1)")
 
                     if salvar_c1:
-                        if not verificar_limite_clique("valida_c1", 5):
+                        if not verificar_limite_clique("valida_c1", 5):                            
                             st.stop()
+                        valido_cert = validar_arquivo(certidao_c1, "Certidão/RG da Criança")
+                        valido_guarda = validar_arquivo(termo_guarda_c1, "Termo de Guarda")
+                        valido_decl = validar_arquivo(declaracao_escolar_c1, "Declaração Escolar")
+                        if not (valido_cert and valido_guarda and valido_decl):
+                            st.stop()
+
                         erros_c1 = []
                         if not nome_filho_c1.strip(): erros_c1.append("O nome da criança é obrigatório.")
                         if not genero_c1: erros_c1.append("O gênero é obrigatório.")
@@ -2921,6 +2990,12 @@ def interface():
                     if salvar_c2:
                         if not verificar_limite_clique("valida_c2", 5):
                             st.stop()
+                        valido_cert = validar_arquivo(certidao_c2, "Certidão/RG da Criança")
+                        valido_tutela = validar_arquivo(termo_tutela_c2, "Termo de Tutela")
+                        valido_decl = validar_arquivo(declaracao_escolar_c2, "Declaração Escolar")
+                        if not (valido_cert and valido_tutela and valido_decl):
+                            st.stop()
+
                         erros_c2 = []
                         if not nome_filho_c2.strip(): erros_c2.append("O nome da criança é obrigatório.")
                         if not genero_c2: erros_c2.append("O gênero é obrigatório.")

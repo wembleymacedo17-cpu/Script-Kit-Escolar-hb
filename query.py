@@ -35,7 +35,7 @@ WHERE a.numemp = 1
 ORDER BY a.nomfun
 """
 
-
+################################################################################# DAODOS GLOBAIS 
 
 busca_suba = """SELECT cracha , nome_funcionario, situacao, descricao_situacao FROM colaboradores  """
 
@@ -71,3 +71,8 @@ MODELOS_GEMINI = [
 ]
 
 ERROS_RETRY = ("503", "unavailable", "timeout", "timed out", "429", "high demand", "disconnected", "remoteprotocolerror", "reset")   
+
+
+
+TAMANHO_MAXIMO_MB = 10
+EXTENSOES_PERMITIDAS = ["pdf", "png", "jpg", "jpeg"]
