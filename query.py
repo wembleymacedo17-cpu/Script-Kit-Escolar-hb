@@ -5,11 +5,12 @@ COLABORADOR="""
 SELECT 
     a.numcad AS cracha,
     a.nomfun AS nome,
+    LPAD(TO_CHAR(a.numcpf), 11, '0') AS cpf,
+    TO_CHAR(a.datnas, 'YYYY-MM-DD') AS data_nascimento,
     b.dessit AS descricao_situacao,
     car.codcar AS id_cargo,
     car.titcar AS titulo_reduzido_cargo,
     a.datafa AS data_demissao
-
 FROM r034fun a
 LEFT JOIN r010sit b 
     ON a.sitafa = b.codsit
@@ -27,11 +28,8 @@ LEFT JOIN r038hca hca
 LEFT JOIN r024car car
     ON car.estcar = hca.estcar
    AND car.codcar = hca.codcar
-
 WHERE a.numemp = 1 
-  AND a.tipcol =  1
-
-
+  AND a.tipcol = 1
 ORDER BY a.nomfun
 """
 

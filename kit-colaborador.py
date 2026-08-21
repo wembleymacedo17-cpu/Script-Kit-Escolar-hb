@@ -615,14 +615,15 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             "cracha": colaborador["cracha"],            
             "Crachá": colaborador["cracha"],
             "Nome": colaborador["nome"],
-            "nome": colaborador["nome"],                
+            "nome": colaborador["nome"],
+            "cpf": colaborador.get("Cpf"),
+            "data_nascimento": colaborador.get("data_nascimento"), # 👈 Garanta que mapeia aqui
             "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
             "Descrição (Situação)": colaborador["descricao_situacao"],
             "id_cargo": int(colaborador["id_cargo"]) if colaborador.get("id_cargo") else None,
-            "totp_secret": colaborador.get("totp_secret"),     # 👈 Estado do TOTP do banco
-            "totp_ativo": colaborador.get("totp_ativo", False) # 👈 Status do TOTP do banco
+            "totp_secret": colaborador.get("totp_secret"),
+            "totp_ativo": colaborador.get("totp_ativo", False)
         }
-        
 
         
         return st.session_state.colaborador
@@ -639,15 +640,17 @@ def eh_email_pessoal(email: str) -> bool:
     return partes[1] in DOMINIOS_PESSOAIS_PERMITIDOS
 
 
-def adiciona_dados_contato():
+def adiciona_dados_contato(email_padrao: str = "", telefone_padrao: str = "", form_key: str = "form_contato"):
     print("Adicionando dados de contato...")
-    with st.form("form_contato"):
+    
+    # Passa a chave única recebida por parâmetro para evitar o erro de chave duplicada
+    with st.form(key=form_key):
         st.subheader("📞 Dados de Contato")
         
-        email = st.text_input("E-mail", placeholder="rh_4.0-@gmail.com")
-        confirmacao_email = st.text_input("Confirme o E-mail", placeholder="rh_4.0-@gmail.com")
+        email = st.text_input("E-mail", value=email_padrao, placeholder="rh_4.0-@gmail.com")
+        confirmacao_email = st.text_input("Confirme o E-mail", value=email_padrao, placeholder="rh_4.0-@gmail.com")
             
-        telefone = st.text_input("Número de Telefone (WhatsApp)")
+        telefone = st.text_input("Número de Telefone (WhatsApp)", value=telefone_padrao)
         salvar = st.form_submit_button("💾 Salvar Dados de Contato")
         
     if not salvar:
@@ -686,8 +689,6 @@ def adiciona_dados_contato():
         "email": email_digitado.lower(), 
         "telefone": formata_telefone(telefone)
     }
-
-
 def adicionar_dependentes():
     st.subheader("👶 Adicionar Dependente")
     st.write(f"Nome Responsável: {st.session_state.colaborador['Nome']}")
@@ -1764,7 +1765,9 @@ def interface():
     if 'colaborador' not in st.session_state:
         st.session_state.colaborador = None
     if 'autenticado_totp' not in st.session_state:
-        st.session_state.autenticado_totp = False    
+        st.session_state.autenticado_totp = False 
+    if 'acao_retorno' not in st.session_state:        
+        st.session_state.acao_retorno = None            
     if 'contato' not in st.session_state:
         st.session_state.contato = None
     if 'tipo_fluxo' not in st.session_state:
@@ -1844,25 +1847,26 @@ def interface():
             colaborador = busca_colaborador()
             if colaborador is not None:
                 st.session_state.colaborador = colaborador
-                st.rerun() # Recarrega para sumir com o formulário de busca imediatamente
+                st.rerun() 
             return
 
-        # 2. Colaborador encontrado, mas AINDA NÃO AUTENTICADO NO 2FA
-        if st.session_state.colaborador is not None and not st.session_state.get("autenticado_totp", False):
+        # 2. TRAVA DE SEGURANÇA 2FA
+        if not st.session_state.autenticado_totp:
             if verificar_autenticacao_totp(st.session_state.colaborador, SessionLocal().bind):
                 st.session_state.autenticado_totp = True
-                st.rerun() # Recarrega a tela após digitar o código correto
-            st.stop() # Pausa a renderização aqui para não mostrar a ficha antes da hora
+                st.rerun() 
+            st.stop() 
 
-        # 3. AUTENTICADO COM SUCESSO! Agora sim a Ficha e o Contato aparecem na tela
-        if st.session_state.colaborador is not None and st.session_state.get("autenticado_totp", False):
-            st.divider()
-            st.subheader("📋 Ficha do Colaborador")
-            st.text_input("Nome Completo", value=st.session_state.colaborador['Nome'], disabled=True)
-            st.text_input("Cargo", value=st.session_state.colaborador['Título Reduzido (Cargo)'] or "", disabled=True)
-            st.text_input("Situação", value=st.session_state.colaborador['Descrição (Situação)'] or "", disabled=True)
+        # 3. FICHA DO COLABORADOR E KITS EXISTENTES
+        st.divider()
+        st.subheader("📋 Ficha do Colaborador")
+        st.text_input("Nome Completo", value=st.session_state.colaborador['Nome'], disabled=True)
+        st.text_input("Cargo", value=st.session_state.colaborador['Título Reduzido (Cargo)'] or "", disabled=True)
+        st.text_input("Situação", value=st.session_state.colaborador['Descrição (Situação)'] or "", disabled=True)
 
-            if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
+        if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
+            # Se a ação for "adicionar_dependente", pula o bloqueio de dependentes existentes
+            if st.session_state.acao_retorno != "adicionar_dependente":
                 db = SessionLocal()
                 try:
                     dependentes_existentes = db.query(Dependente).filter(
@@ -1870,22 +1874,107 @@ def interface():
                     ).all()
                     
                     if dependentes_existentes and len(st.session_state.lista_dependentes) == 0:
-                        st.warning("⚠️ Teu crachá já tem dependentes atrelados a ele.")
-                        editar_kits_existentes(st.session_state.colaborador['id'])
-                        return  
+                        st.warning("⚠️ O seu crachá já tem dependentes atrelados a ele.")
+                        
+                        # Verifica se TODOS os dependentes foram aprovados (revisao_rh começa com "Não")
+                        aprovado = all(d.revisao_rh and str(d.revisao_rh).strip().startswith("Não") for d in dependentes_existentes)
+                        
+                        if not aprovado:
+                            st.info("🕒 **STATUS: A DOCUMENTAÇÃO ESTÁ SENDO ANALISADA PELO RH**")
+                            st.write("EM BREVE CHEGARÁ UM E-MAIL COM MAIS ORIENTAÇÃO.")
+                            
+                            # ➕ Botão liberado para adicionar novos dependentes enquanto aguarda o RH
+                            if st.button("➕ Adicionar Mais dependentes", use_container_width=True):
+                                st.session_state.acao_retorno = "adicionar_dependente"
+                                st.rerun()
+                                
+                            # Interrompe o fluxo aqui para não exibir as opções de Mudar Kit/QR Code
+                            if st.session_state.acao_retorno != "adicionar_dependente":
+                                return 
+                        else:
+                            st.success("✅ **STATUS: APROVADO**")
+                            
+                            # Renderiza os 3 botões em colunas
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                if st.button("🎒 Mudar escolha do Kit", use_container_width=True):
+                                    st.session_state.acao_retorno = "mudar_kit"
+                                    st.rerun()
+                            with col2:
+                                if st.button("➕ Adicionar Mais dependentes", use_container_width=True):
+                                    st.session_state.acao_retorno = "adicionar_dependente"
+                                    st.rerun()
+                            with col3:
+                                if st.button("🎟️ Buscar QRCODE", use_container_width=True):
+                                    st.session_state.acao_retorno = "ver_qrcode"
+                                    st.rerun()
+
+                            # Lógica de navegação baseada no botão clicado
+                            if st.session_state.acao_retorno == "mudar_kit":
+                                editar_kits_existentes(st.session_state.colaborador['id'])
+                                return
+                                
+                            elif st.session_state.acao_retorno == "ver_qrcode":
+                                st.divider()
+                                st.subheader("🎟️ Seu QR Code de Retirada")
+                                base_url_qr = os.getenv("BASE_URL_QRCODE", "")
+                                
+                                if not base_url_qr:
+                                    st.error("⚠️ ERRO DE CONFIGURAÇÃO: A variável `BASE_URL_QRCODE` não está configurada no arquivo .env.")
+                                    return
+                                    
+                                cracha_str = str(st.session_state.colaborador['id'])
+                                if not base_url_qr.endswith("/"):
+                                    base_url_qr += "/"
+                                    
+                                url_qr = f"{base_url_qr}{cracha_str}.png"
+                                
+                                try:
+                                    st.image(url_qr, width=300, caption="Apresente este QR Code no dia da retirada.")
+                                    st.markdown(f"📥 [Clique aqui para baixar o seu QR Code diretamente]({url_qr})")
+                                except Exception:
+                                    st.error("⚠️ A imagem do QR Code ainda não foi encontrada no servidor em nuvem.")
+                                return
+                                
+                            else:
+                                return
                 finally:
                     db.close()
 
-            contato = adiciona_dados_contato()
-            if contato is not None:
-                st.session_state.contato = contato
-                st.rerun()
-    
+        # 4. FORMULÁRIO DE CONTATO
+        email_salvo = ""
+        telefone_salvo = ""
+
+        db = SessionLocal()
+        try:
+            retirada_existente = db.query(Retirada).filter(
+                Retirada.id_colaborador == st.session_state.colaborador['id']
+            ).first()
+
+            if retirada_existente:
+                email_salvo = retirada_existente.email or ""
+                telefone_salvo = retirada_existente.telefone or ""
+                # CORREÇÃO: Não define st.session_state.contato aqui para não saltar o formulário!
+        finally:
+            db.close()
+
+        chave_unica_form = f"form_contato_{st.session_state.colaborador['id']}"
+
+        contato = adiciona_dados_contato(
+            email_padrao=email_salvo, 
+            telefone_padrao=telefone_salvo,
+            form_key=chave_unica_form
+        )
+        if contato is not None:
+            st.session_state.contato = contato
+            st.rerun()
+
+    # ===================== FASE 2: TRIAGEM DE VÍNCULO =====================
     else:
-        # ===================== FASE 2: TRIAGEM DE VÍNCULO =====================
         st.success(f"👤 Colaborador: {st.session_state.colaborador['Nome']} | ✅ Contato salvo.")
 
-        if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
+        # CORREÇÃO: Pula este bloqueio se o usuário clicou em adicionar mais dependentes
+        if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado and st.session_state.acao_retorno != "adicionar_dependente":
             db = SessionLocal()
             try:
                 dependentes_existentes = db.query(Dependente).filter(Dependente.id_colaborador == st.session_state.colaborador['id']).all()
@@ -1921,6 +2010,7 @@ def interface():
                 st.rerun()
             return
 
+        # Restante do código dos fluxos A, B, C mantido sem alter
         if st.session_state.aguardando_decisao:
             st.divider()
             st.subheader("✅ Item adicionado ao carrinho com sucesso!")

@@ -35,16 +35,20 @@ Base = declarative_base()
 
 class Colaborador(Base):
     __tablename__ = "colaboradores"
+    __table_args__ = {'extend_existing': True}
+    
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     cracha = Column(BigInteger, unique=True, nullable=False)
     nome = Column(Text, nullable=False)
+    cpf = Column(String(11), nullable=True)
+    data_nascimento = Column(Date, nullable=True)
     descricao_situacao = Column(Text)
+    id_cargo = Column(BigInteger, nullable=True)
     titulo_reduzido_cargo = Column(Text)
     data_demissao = Column(Date)
     criado_em = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    situacao = Column(Integer)
 
-    # 🔒 COLUNAS TOTP
+    # 🔒 COLUNAS TOTP (Preservadas no UPSERT)
     totp_secret = Column(String(32), nullable=True)
     totp_ativo = Column(Boolean, default=False)
 
@@ -53,6 +57,8 @@ class Colaborador(Base):
 
 class Dependente(Base):
     __tablename__ = "dependentes"
+    __table_args__ = {'extend_existing': True}
+    
     id_dependente = Column(Integer, primary_key=True, autoincrement=True)
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
     nome_filho = Column(Text, nullable=False)
@@ -79,6 +85,11 @@ class Dependente(Base):
 
 class EscolhaKit(Base):
     __tablename__ = "escolhas_kits"
+    __table_args__ = (
+        UniqueConstraint('id_dependente', name='uk_dependente_kit'),
+        {'extend_existing': True}
+    )
+    
     id_escolha = Column(Integer, primary_key=True, autoincrement=True)
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
     id_dependente = Column(Integer, ForeignKey("dependentes.id_dependente", ondelete="CASCADE"), nullable=False)
@@ -89,11 +100,14 @@ class EscolhaKit(Base):
 
     dependente = relationship("Dependente", back_populates="escolha")
 
-    __table_args__ = (UniqueConstraint('id_dependente', name='uk_dependente_kit'),)
-
 
 class Retirada(Base):
     __tablename__ = "retiradas"
+    __table_args__ = (
+        CheckConstraint("status IN ('PENDENTE', 'ENTREGUE')", name='chk_status_retirada'),
+        {'extend_existing': True}
+    )
+    
     id_retirada = Column(Integer, primary_key=True, autoincrement=True)
     codigo_retirada = Column(String(255), unique=True, nullable=False)
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
@@ -104,8 +118,6 @@ class Retirada(Base):
     status = Column(String(20), default='PENDENTE', nullable=False)
     data_geracao = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     data_entrega = Column(DateTime)
-
-    __table_args__ = (CheckConstraint("status IN ('PENDENTE', 'ENTREGUE')", name='chk_status_retirada'),)
 
 
 # ===================== FUNÇÕES E MÉTODOS =====================
@@ -126,10 +138,12 @@ def init_db():
 
 def atualizar_colaboradores_merge(engine_db, df_oracle: pd.DataFrame):
     """
-    Carrega os dados do Oracle mantendo os campos de TOTP intactos no Postgres.
+    Sincroniza os dados do Senior com o Supabase usando Tabela Staging.
+    Preserva intactas as colunas 'totp_secret' e 'totp_ativo'.
     """
     try:
-        # 1. Carrega dados do Oracle na tabela temporária de Staging
+        print("📥 Subindo carga para tabela temporária 'stg_colaboradores'...")
+        
         df_oracle.to_sql(
             name='stg_colaboradores',
             con=engine_db,
@@ -139,45 +153,49 @@ def atualizar_colaboradores_merge(engine_db, df_oracle: pd.DataFrame):
             method='multi'
         )
         
-        # 2. Executa MERGE (UPSERT) da Staging para a Tabela Principal 'colaboradores'
         query_upsert = """
             INSERT INTO colaboradores (
                 cracha, 
                 nome, 
+                cpf,
+                data_nascimento,
                 descricao_situacao, 
+                id_cargo,
                 titulo_reduzido_cargo, 
-                data_demissao, 
-                situacao, 
+                data_demissao,
                 totp_secret, 
                 totp_ativo
             )
             SELECT 
                 s.cracha, 
                 s.nome, 
+                s.cpf,
+                CAST(s.data_nascimento AS DATE),
                 s.descricao_situacao, 
+                s.id_cargo,
                 s.titulo_reduzido_cargo, 
-                s.data_demissao, 
-                s.situacao,
+                CAST(s.data_demissao AS DATE),
                 NULL AS totp_secret,
                 FALSE AS totp_ativo
             FROM stg_colaboradores s
             ON CONFLICT (cracha) DO UPDATE SET
                 nome = EXCLUDED.nome,
+                cpf = EXCLUDED.cpf,
+                data_nascimento = EXCLUDED.data_nascimento,
                 descricao_situacao = EXCLUDED.descricao_situacao,
+                id_cargo = EXCLUDED.id_cargo,
                 titulo_reduzido_cargo = EXCLUDED.titulo_reduzido_cargo,
-                data_demissao = EXCLUDED.data_demissao,
-                situacao = EXCLUDED.situacao;
+                data_demissao = EXCLUDED.data_demissao;
             
-            -- Limpa a tabela temporária após a sincronização
             DROP TABLE IF EXISTS stg_colaboradores;
         """
         
         with engine_db.begin() as conn:
             conn.execute(text(query_upsert))
-        print("✅ Tabela 'colaboradores' sincronizada com sucesso mantendo os dados de TOTP!")
+        print("✅ Tabela 'colaboradores' sincronizada com sucesso preservando os dados de TOTP!")
 
     except Exception as e:
-        print(f"❌ Erro ao realizar o MERGE dos colaboradores: {e}")
+        print(f"❌ Erro ao realizar a sincronização dos colaboradores: {e}")
         raise e
 
 
