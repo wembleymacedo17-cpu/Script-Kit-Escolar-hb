@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean, text
@@ -48,7 +48,6 @@ class Colaborador(Base):
     data_demissao = Column(Date)
     criado_em = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    # 🔒 COLUNAS TOTP (Preservadas no UPSERT)
     totp_secret = Column(String(32), nullable=True)
     totp_ativo = Column(Boolean, default=False)
 
@@ -71,12 +70,10 @@ class Dependente(Base):
     motivo_reprova_ia = Column(String, nullable=True)
     url_documento = Column(String, nullable=True)
 
-    # 🔒 COLUNAS DE COMPLIANCE
     aceite_ia = Column(Boolean, default=False)
     aceite_lgpd = Column(Boolean, default=False)
     data_aceite = Column(DateTime, nullable=True)
 
-    # Registro de fluxo e documento
     fluxo_documento = Column(Text, nullable=True)
 
     colaborador = relationship("Colaborador", back_populates="dependentes")
@@ -126,8 +123,9 @@ class LogAuditoria(Base):
     
     id_log = Column(Integer, primary_key=True, autoincrement=True)
     cracha = Column(BigInteger, nullable=True)
-    acao = Column(String(100), nullable=False)  
-    detalhes = Column(Text, nullable=True)      
+    acao = Column(String(100), nullable=False)
+    detalhes = Column(Text, nullable=True)
+    ip_origem = Column(String(50), nullable=True)
     data_hora = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 # ===================== FUNÇÕES E MÉTODOS =====================
@@ -147,10 +145,7 @@ def init_db():
 
 
 def atualizar_colaboradores_merge(engine_db, df_oracle: pd.DataFrame):
-    """
-    Sincroniza os dados do Senior com o Supabase usando Tabela Staging.
-    Preserva intactas as colunas 'totp_secret' e 'totp_ativo'.
-    """
+    """Sincroniza os dados do Senior com o Supabase usando Tabela Staging."""
     try:
         print("📥 Subindo carga para tabela temporária 'stg_colaboradores'...")
         
@@ -208,13 +203,13 @@ def atualizar_colaboradores_merge(engine_db, df_oracle: pd.DataFrame):
         print(f"❌ Erro ao realizar a sincronização dos colaboradores: {e}")
         raise e
 
-def obter_ip_cliente():
+
+def obter_ip_cliente() -> str:
     """Captura o endereço de IP real do usuário conectado ao Streamlit."""
     try:
         from streamlit.web.server.websocket_headers import _get_websocket_headers
         headers = _get_websocket_headers()
         if headers:
-            # Tenta pegar o IP repassado por proxies em produção
             ip = headers.get("X-Forwarded-For", "").split(",")[0].strip()
             if not ip:
                 ip = headers.get("Remote-Addr", "")
@@ -227,7 +222,7 @@ def obter_ip_cliente():
 
 
 def registrar_log(cracha: int, acao: str, detalhes: str = None, ip_origem: str = None):
-    """Grava um registro de auditoria completo com IP do usuário."""
+    """Grava um registro de auditoria salvando o IP em coluna dedicada."""
     db = SessionLocal()
     try:
         ip_final = ip_origem or obter_ip_cliente()
@@ -235,14 +230,31 @@ def registrar_log(cracha: int, acao: str, detalhes: str = None, ip_origem: str =
             cracha=cracha,
             acao=acao,
             detalhes=detalhes,
+            ip_origem=ip_final
         )
-        if not hasattr(LogAuditoria, 'ip_origem'):
-            novo_log.detalhes = f"[IP: {ip_final}] {detalhes or ''}"
-
         db.add(novo_log)
         db.commit()
     except Exception as e:
         print(f"❌ Erro ao gravar log de auditoria: {e}")
+    finally:
+        db.close()
+
+
+def ip_esta_bloqueado(ip_cliente: str = None, limite_falhas: int = 5, minutos: int = 15) -> bool:
+    """Verifica se o IP acumulou falhas excessivas na janela de tempo."""
+    ip_alvo = ip_cliente or obter_ip_cliente()
+    db = SessionLocal()
+    try:
+        limite_tempo = datetime.now(timezone.utc) - timedelta(minutes=minutos)
+        total_falhas = db.query(LogAuditoria).filter(
+            LogAuditoria.ip_origem == ip_alvo,
+            LogAuditoria.acao.in_(["FALHA_CONFIRMACAO_IDENTIDADE", "FALHA_ATIVACAO_TOTP", "FALHA_LOGIN_TOTP"]),
+            LogAuditoria.data_hora >= limite_tempo
+        ).count()
+        return total_falhas >= limite_falhas
+    except Exception as e:
+        print(f"⚠️ Erro ao checar bloqueio de IP: {e}")
+        return False
     finally:
         db.close()
 

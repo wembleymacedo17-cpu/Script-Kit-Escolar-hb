@@ -5,7 +5,7 @@ import qrcode
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime, date
-from database import registrar_log
+from database import registrar_log, ip_esta_bloqueado, obter_ip_cliente
 
 
 def gerar_secret_totp():
@@ -35,8 +35,19 @@ def validar_codigo_totp(secret_key: str, codigo_digitado: str) -> bool:
 
 
 def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
-    """Interface do Streamlit para o fluxo de TOTP com Trava Dupla e Auditoria em Log."""
+    """Interface do Streamlit para o fluxo de TOTP com Trava Dupla, Proteção de IP e Auditoria."""
     st.subheader("🔒 Validação de Segurança (2FA)")
+
+    ip_atual = obter_ip_cliente()
+
+    # 🛑 BARREIRA PREVENTIVA: Se o IP exceder 5 erros em 15 minutos, bloqueia o formulário.
+    if ip_esta_bloqueado(ip_atual, limite_falhas=5, minutos=15):
+        st.error(
+            f"🚨 **Acesso temporariamente bloqueado por segurança.**\n\n"
+            f"Detectamos múltiplas tentativas de acesso incorretas a partir da sua rede (`{ip_atual}`). "
+            f"Por favor, aguarde 15 minutos antes de tentar novamente."
+        )
+        return False
 
     nome_colab = colaborador.get("Nome") or colaborador.get("nome") or "Colaborador"
     cracha_colab = colaborador.get("Crachá") or colaborador.get("cracha") or colaborador.get("id")
@@ -103,7 +114,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
 
                 if valida_data and valida_cpf:
                     st.session_state.identidade_confirmada = True
-                    registrar_log(cracha_colab, "CONFIRMACAO_IDENTIDADE_SUCESSO", "Data de nascimento e 3 dígitos do CPF validados com sucesso.")
+                    registrar_log(cracha_colab, "CONFIRMACAO_IDENTIDADE_SUCESSO", "Data de nascimento e 3 dígitos do CPF validados com sucesso.", ip_origem=ip_atual)
                     st.success("✅ Identidade confirmada!")
                     st.rerun()
                 else:
@@ -114,7 +125,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                         erros_identidade.append("Data de nascimento incorreta.")
                     
                     msg_detalhes = " ".join(erros_identidade)
-                    registrar_log(cracha_colab, "FALHA_CONFIRMACAO_IDENTIDADE", f"Tentativa negada: {msg_detalhes}")
+                    registrar_log(cracha_colab, "FALHA_CONFIRMACAO_IDENTIDADE", f"Tentativa negada: {msg_detalhes}", ip_origem=ip_atual)
                     st.error(f"❌ Falha na validação: {msg_detalhes} O cadastro do 2FA não pôde ser liberado.")
             
             return False
@@ -162,7 +173,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 colaborador["totp_secret"] = str(secret).strip()
                 colaborador["totp_ativo"] = True
                 
-                registrar_log(cracha_colab, "TOTP_ATIVADO_SUCESSO", "Primeiro acesso concluído e chave 2FA vinculada ao dispositivo.")
+                registrar_log(cracha_colab, "TOTP_ATIVADO_SUCESSO", "Primeiro acesso concluído e chave 2FA vinculada ao dispositivo.", ip_origem=ip_atual)
 
                 if "temp_totp_secret" in st.session_state:
                     del st.session_state.temp_totp_secret
@@ -172,7 +183,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 st.success("✅ Validador configurado com sucesso!")
                 return True
             else:
-                registrar_log(cracha_colab, "FALHA_ATIVACAO_TOTP", "Código de 6 dígitos incorreto durante a tentativa de ativação.")
+                registrar_log(cracha_colab, "FALHA_ATIVACAO_TOTP", "Código de 6 dígitos incorreto durante a tentativa de ativação.", ip_origem=ip_atual)
                 st.error("❌ Código incorreto. Verifique o relógio do celular e tente novamente.")
 
         return False
@@ -188,10 +199,10 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
 
         if btn_entrar:
             if validar_codigo_totp(secret_cadastrado, codigo_login):
-                registrar_log(cracha_colab, "LOGIN_TOTP_SUCESSO", "Acesso autorizado via código 2FA.")
+                registrar_log(cracha_colab, "LOGIN_TOTP_SUCESSO", "Acesso autorizado via código 2FA.", ip_origem=ip_atual)
                 return True
             else:
-                registrar_log(cracha_colab, "FALHA_LOGIN_TOTP", "Código TOTP inválido ou expirado digitado no login recorrente.")
+                registrar_log(cracha_colab, "FALHA_LOGIN_TOTP", "Código TOTP inválido ou expirado digitado no login recorrente.", ip_origem=ip_atual)
                 st.error("❌ Código inválido ou expirado. Tente novamente.")
 
         return False
