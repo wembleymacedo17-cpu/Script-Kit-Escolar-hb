@@ -5,11 +5,12 @@ COLABORADOR="""
 SELECT 
     a.numcad AS cracha,
     a.nomfun AS nome,
+    LPAD(TO_CHAR(a.numcpf), 11, '0') AS cpf,
+    TO_CHAR(a.datnas, 'YYYY-MM-DD') AS data_nascimento,
     b.dessit AS descricao_situacao,
     car.codcar AS id_cargo,
     car.titcar AS titulo_reduzido_cargo,
     a.datafa AS data_demissao
-
 FROM r034fun a
 LEFT JOIN r010sit b 
     ON a.sitafa = b.codsit
@@ -27,15 +28,12 @@ LEFT JOIN r038hca hca
 LEFT JOIN r024car car
     ON car.estcar = hca.estcar
    AND car.codcar = hca.codcar
-
 WHERE a.numemp = 1 
-  AND a.tipcol =  1
-
-
+  AND a.tipcol = 1
 ORDER BY a.nomfun
 """
 
-
+################################################################################# DAODOS GLOBAIS 
 
 busca_suba = """SELECT cracha , nome_funcionario, situacao, descricao_situacao FROM colaboradores  """
 
@@ -66,8 +64,13 @@ DOMINIOS_PESSOAIS_PERMITIDOS = {
 
 MODELOS_GEMINI = [
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash"
+    "gemini-3.6-flash",
+    "gemini-2.5-flash"
 ]
 
 ERROS_RETRY = ("503", "unavailable", "timeout", "timed out", "429", "high demand", "disconnected", "remoteprotocolerror", "reset")   
+
+
+
+TAMANHO_MAXIMO_MB = 10
+EXTENSOES_PERMITIDAS = ["pdf", "png", "jpg", "jpeg"]

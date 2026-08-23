@@ -14,13 +14,18 @@ from io import BytesIO
 import uuid
 from datetime import datetime
 import time 
+from rate_limiter import verificar_limite_clique
 # ==================== IMPORTS DO BANCO ====================
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
 from conector_oracle import OracleConnector
 from conector_Postgre import SupabaseConnector
-from supabase import create_client,Client
+import boto3
+from botocore.exceptions import ClientError
 from notificador_email import NotificadorEmail, SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY, EMAIL_REMETENTE
-from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY
+from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY, TAMANHO_MAXIMO_MB,EXTENSOES_PERMITIDAS
+from autenticacao_totp import verificar_autenticacao_totp
+
+
 
 
 load_dotenv()
@@ -56,33 +61,34 @@ generation_config_certidao = types.GenerateContentConfig(
     }
 )
 # ---------------------------------------------------------------
-# CONFIGURAÇÃO DE IA: DECLARAÇÃO ESCOLAR / MATRÍCULA
+# CONFIGURAÇÃO DE IA: DECLARAÇÃO ESCOLAR / MATRÍCULA (EQUILIBRADA)
 # ---------------------------------------------------------------
 generation_config_declaracao_escolar = types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",
     system_instruction=(
-        "Você é um auditor especializado em documentos escolares e acadêmicos brasileiros.\n"
-        "Sua função é analisar o documento e classificar sua autenticidade e validade com precisão.\n\n"
+        "Você é um auditor de documentos acadêmicos e escolares brasileiros.\n"
+        "Sua função é analisar a declaração escolar e categorizar o nível de validação do documento.\n\n"
 
         "1. Identificação da Escola (tem_identificacao_escola):\n"
-        "   - Retorne true se houver nome da escola, logotipo, brasão de prefeitura/estado, CNPJ ou dados formais da instituição.\n"
-        "   - Retorne false se for um texto genérico em folha em branco sem nenhuma identificação da instituição.\n\n"
+        "   - Retorne true se o documento contiver cabeçalho, nome da escola, prefeitura/estado ou dados oficiais da instituição.\n"
+        "   - Retorne false se for um texto totalmente genérico sem identificação da escola.\n\n"
 
-        "2. Tipo de Autenticidade (tipo_autenticidade):\n"
-        "   - 'Fisica': O documento possui assinatura manuscrita (à caneta), rubrica física ou carimbo de tinta/físico visível.\n"
-        "   - 'Digital': O documento foi emitido eletronicamente e possui código de validação, chave de autenticidade, QR Code, link de validação ou assinatura digital (Gov.br / ICP).\n"
-        "   - 'Nenhuma': Não possui assinatura à caneta, não possui carimbo físico e não possui nenhum código/chave/QR Code de validação eletrônica.\n\n"
+        "2. Análise de Autenticidade (tipo_autenticidade):\n"
+        "   - 'Fisica': Possui assinatura manual (à caneta), rubrica física ou carimbo de tinta visível no papel.\n"
+        "   - 'Digital': Possui código de verificação eletrônica, chave de validação, QR Code ou certificado digital oficial.\n"
+        "   - 'Sistema_Sem_Validador': O documento possui dados oficiais de escola pública/sistema educacional (ex: Prefeitura, Secretaria de Educação, RA do aluno, dados da direção), porém é uma impressão direta do sistema sem carimbo ou código de validação digital.\n"
+        "   - 'Nenhuma': Documento sem dados institucionais, sem assinatura, sem validação e com suspeita de digitação manual/sintética sem vínculo escolar.\n\n"
 
         "3. Regra de Validade (eh_declaracao_matricula):\n"
-        "   - Retorne true se o documento atestar matrícula/frequência E 'tem_identificacao_escola' for true E 'tipo_autenticidade' for 'Fisica' ou 'Digital'.\n"
-        "   - Retorne false se não comprovar matrícula, se faltar identificação da escola, ou se 'tipo_autenticidade' for 'Nenhuma'.\n\n"
+        "   - Retorne true se o documento comprovar matrícula E 'tem_identificacao_escola' for true E 'tipo_autenticidade' for 'Fisica', 'Digital' ou 'Sistema_Sem_Validador'.\n"
+        "   - Retorne false se não comprovar matrícula ou 'tipo_autenticidade' for 'Nenhuma'.\n\n"
 
         "4. Extração de Dados:\n"
-        "   - 'nome_aluno': Nome completo do aluno conforme consta no documento.\n"
-        "   - 'codigo_validacao': Extraia o código, chave ou hash de verificação digital (se houver, caso contrário null).\n"
-        "   - 'motivo_rejeicao': Descreva o motivo caso seja reprovado (ex: 'Documento sem assinatura, carimbo ou código de validação').\n"
-        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
+        "   - 'nome_aluno': Nome completo do aluno.\n"
+        "   - 'codigo_validacao': Chave ou código de validação (se houver, caso contrário null).\n"
+        "   - 'motivo_rejeicao': Motivo caso o documento seja inválido.\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA."
     ),
     response_schema={
         "type": "OBJECT",
@@ -92,7 +98,7 @@ generation_config_declaracao_escolar = types.GenerateContentConfig(
             "tem_identificacao_escola": {"type": "BOOLEAN"},
             "tipo_autenticidade": {
                 "type": "STRING", 
-                "enum": ["Fisica", "Digital", "Nenhuma"]
+                "enum": ["Fisica", "Digital", "Sistema_Sem_Validador", "Nenhuma"]
             },
             "codigo_validacao": {"type": "STRING", "nullable": True},
             "nome_aluno": {"type": "STRING"},
@@ -349,40 +355,45 @@ def nomes_correspondem_com_abreviacao(nome_a: str, nome_b: str) -> bool:
             return False
     return True
 
-
 def valida_declaracao_escolar(dados_declaracao: dict, nome_certidao: str):
     """
-    Retorna: (sucesso: bool, mensagem: str, status_revisao_rh: str)
+    Retorna: (sucesso: bool, mensagem_usuario: str, status_revisao_rh: str, motivo_detalhado_rh: str)
     """
     if not dados_declaracao:
-        return False, "Não foi possível analisar a declaração escolar.", "Erro"
+        return False, "Não foi possível analisar a declaração escolar.", "Erro", "IA não conseguiu extrair dados do arquivo."
         
     if dados_declaracao.get("legivel") is False:
-        return False, "A declaração escolar está ilegível.", "Erro"
+        return False, "A declaração escolar está ilegível.", "Erro", "Documento ilegível ou com baixa resolução."
 
     if not dados_declaracao.get("tem_identificacao_escola"):
-        return False, "Documento sem identificação ou cabeçalho oficial da escola.", "Erro"
+        return False, "Documento sem identificação ou cabeçalho oficial da escola.", "Erro", "Falta timbre, CNPJ ou dados institucionais."
+
+    # Se a IA sinalizar suspeita de geração sintética / fraude
+    if dados_declaracao.get("eh_sintetico_suspeito") is True:
+        motivo_alerta = dados_declaracao.get("motivo_rejeicao") or "⚠️ ATENÇÃO RH: Documento com fortes indícios de geração por IA / edição sintética."
+        msg_user = "Recebemos sua declaração escolar. Ela passará por uma verificação detalhada junto à equipe do RH."
+        return True, msg_user, "Sim (Suspeita de Fraude IA)", motivo_alerta
 
     tipo_auth = dados_declaracao.get("tipo_autenticidade")
 
-    # Bloqueia se não tiver nenhum elemento formal de autenticidade
     if tipo_auth == "Nenhuma" or not dados_declaracao.get("eh_declaracao_matricula"):
-        motivo = dados_declaracao.get("motivo_rejeicao") or "O documento não possui assinatura, carimbo nem código de validação."
-        return False, f"Documento Rejeitado: {motivo}", "Erro"
+        motivo = dados_declaracao.get("motivo_rejeicao") or "Sem assinatura, carimbo físico ou código de validação."
+        return False, f"Documento Rejeitado: {motivo}", "Erro", motivo
 
     # Validação do nome do aluno
     nome_declaracao = (dados_declaracao.get("nome_aluno") or "").strip()
     if not nomes_correspondem_com_abreviacao(nome_declaracao, nome_certidao):
-        return False, f"O nome da declaração ({nome_declaracao}) não confere com o documento de identidade ({nome_certidao}).", "Erro"
+        motivo_nome = f"Divergência de Nome: Declaração consta '{nome_declaracao}' e Documento consta '{nome_certidao}'."
+        return False, f"O nome na declaração ({nome_declaracao}) não confere com a identidade ({nome_certidao}).", "Erro", motivo_nome
 
-    # Lógica de Quarentena / Separação para o RH
-    if tipo_auth == "Digital":
-        codigo = dados_declaracao.get("codigo_validacao") or "Código não extraído"
-        msg = f"Declaração eletrônica aceita ({codigo}). Enviada para validação do RH."
-        return True, msg, "Sim (Validação Eletrônica)"
-    
-    # Documento físico validado com carimbo/assinatura manuscrita
-    return True, f"Declaração física válida para {nome_declaracao}.", "Não"
+    # CASO: Declaração Digital ou Emitida via Sistema Sem Validador -> Envia pro RH com o motivo gravado
+    if tipo_auth in ["Digital", "Sistema_Sem_Validador"]:
+        codigo = dados_declaracao.get("codigo_validacao") or "N/A"
+        motivo_rh = f"Declaração emitida via sistema ({tipo_auth}) sem carimbo físico/assinatura manual. Código extraído: {codigo}."
+        msg_user = "Sua declaração foi recebida! Como foi emitida via sistema escolar, nossa equipe do RH fará a conferência dos dados."
+        return True, msg_user, "Sim (Validação Eletrônica)", motivo_rh
+
+    return True, f"Declaração física válida para {nome_declaracao}.", "Não", None
 
 # 🔹 ALTERAÇÃO: Mensagem genérica para quando for RG e o usuário não enviar a filiação
 def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
@@ -392,16 +403,17 @@ def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
     if not nome_pai and not nome_mae:
         return False, "❌ Não foi possível identificar os nomes dos pais no documento (se enviou RG, certifique-se de que o lado com a filiação está visível)."
 
-    nome_db   = padroniza_texto(nome_colaborador)
-    pai_cert  = padroniza_texto(nome_pai)
-    mae_cert  = padroniza_texto(nome_mae)
-
-    if nome_db == pai_cert:
+    # Usa a nova comparação inteligente para testar se é o pai
+    if compara_nomes_flexivel(nome_colaborador, nome_pai):
         return True, f"✅ Nome confere com o pai: {nome_pai}"
-    if nome_db == mae_cert:
+        
+    # Usa a nova comparação inteligente para testar se é a mãe
+    if compara_nomes_flexivel(nome_colaborador, nome_mae):
         return True, f"✅ Nome confere com a mãe: {nome_mae}"
 
-    return False, None
+    # Retorna o erro detalhado 
+    erro_msg = f"❌ O nome do colaborador ({nome_colaborador}) não confere com a filiação extraída: (Pai: {nome_pai or 'Não consta'} | Mãe: {nome_mae or 'Não consta'})."
+    return False, erro_msg
 
 
 def executar_gemini_com_fallback(contents_data, config_schema, status_spinner=None, tentativas_por_modelo=2):
@@ -548,7 +560,7 @@ def analisa_certidao_complementar(arquivo):
 
 
 def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalidez"]):
-    """Busca colaborador diretamente no banco de dados (Supabase)"""
+    """Busca colaborador diretamente no banco de dados (Supabase) trazendo CPF e Data de Nascimento"""
     print("Buscando colaborador no banco...")
     
     with st.form("form_busca"):
@@ -567,58 +579,64 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
     
     supabase_connector = SupabaseConnector()
     try:
+        # 🛡️ QUERY ATUALIZADA: Incluindo 'cpf' e 'data_nascimento'
         query_banco = f"""
         SELECT 
             cracha,
             nome,
+            cpf,
+            data_nascimento,
             descricao_situacao,
             titulo_reduzido_cargo,
             id_cargo,
-            data_demissao
+            data_demissao,
+            totp_secret,
+            totp_ativo
         FROM colaboradores
         WHERE cracha = {cracha_numero}
         """
         df = pd.read_sql(query_banco, supabase_connector.engine)
         colaborador = df.to_dict(orient="records")[0] if not df.empty else None
-        if colaborador:
-            print(f"DEBUG -> id_cargo bruto: {repr(colaborador['id_cargo'])} | tipo: {type(colaborador['id_cargo'])}")
         
         if not colaborador:
             st.error("⚠️ Crachá não encontrado na base de dados.")
-            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
+            st.session_state.colaborador = None  
             return None
             
         if colaborador["descricao_situacao"] in situacoes_invalidas:
             st.error(f"⚠️ Colaborador não elegível. Situação atual: {colaborador['descricao_situacao']}")
-            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
+            st.session_state.colaborador = None  
             return None
 
-        # ==================== NOVA VALIDAÇÃO DE CARGOS REJEITADOS ====================
         if str(colaborador["id_cargo"]) in CARGOS_REJEIATO:
             st.error(
                 "🎁 O Kit Escolar é uma iniciativa de apoio social direcionada a categorias específicas "
                 "da nossa instituição e, por isso, não está disponível para o seu cargo. "
                 "Agradecemos muito pela compreensão!"
             )
-            st.session_state.colaborador = None  # Reseta o estado para bloquear a tela seguinte
+            st.session_state.colaborador = None  
             return None
             
-        # ==================== SALVA NO SESSION_STATE ====================
+        # Formatador rápido de segurança para garantir 11 dígitos no CPF
+        cpf_raw = str(colaborador.get("cpf", "")).strip().split(".")[0]
+        cpf_formatado = cpf_raw.zfill(11) if cpf_raw and cpf_raw != "None" else ""
+
+        # ==================== SALVA NO SESSION_STATE COM AS COLUNAS CORRETAS ====================
         st.session_state.colaborador = {
             "id": colaborador["cracha"],
+            "cracha": colaborador["cracha"],            
             "Crachá": colaborador["cracha"],
             "Nome": colaborador["nome"],
+            "nome": colaborador["nome"],
+            "cpf": cpf_formatado,
+            "data_nascimento": colaborador.get("data_nascimento"),
             "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
             "Descrição (Situação)": colaborador["descricao_situacao"],
-            "id_cargo": int(colaborador["id_cargo"]) if colaborador.get("id_cargo") else None
+            "id_cargo": int(colaborador["id_cargo"]) if colaborador.get("id_cargo") else None,
+            "totp_secret": colaborador.get("totp_secret"),
+            "totp_ativo": colaborador.get("totp_ativo", False)
         }
-        
-        st.divider()
-        st.subheader("📋 Ficha do Colaborador")
-        st.text_input("Nome Completo", value=colaborador['nome'], disabled=True)
-        st.text_input("Cargo", value=colaborador['titulo_reduzido_cargo'] or "", disabled=True)
-        st.text_input("Situação", value=colaborador['descricao_situacao'] or "", disabled=True)
-        
+
         return st.session_state.colaborador
         
     finally:
@@ -633,15 +651,17 @@ def eh_email_pessoal(email: str) -> bool:
     return partes[1] in DOMINIOS_PESSOAIS_PERMITIDOS
 
 
-def adiciona_dados_contato():
+def adiciona_dados_contato(email_padrao: str = "", telefone_padrao: str = "", form_key: str = "form_contato"):
     print("Adicionando dados de contato...")
-    with st.form("form_contato"):
+    
+    # Passa a chave única recebida por parâmetro para evitar o erro de chave duplicada
+    with st.form(key=form_key):
         st.subheader("📞 Dados de Contato")
         
-        email = st.text_input("E-mail", placeholder="rh_4.0-@gmail.com")
-        confirmacao_email = st.text_input("Confirme o E-mail", placeholder="rh_4.0-@gmail.com")
+        email = st.text_input("E-mail", value=email_padrao, placeholder="rh_4.0-@gmail.com")
+        confirmacao_email = st.text_input("Confirme o E-mail", value=email_padrao, placeholder="rh_4.0-@gmail.com")
             
-        telefone = st.text_input("Número de Telefone (WhatsApp)")
+        telefone = st.text_input("Número de Telefone (WhatsApp)", value=telefone_padrao)
         salvar = st.form_submit_button("💾 Salvar Dados de Contato")
         
     if not salvar:
@@ -680,8 +700,6 @@ def adiciona_dados_contato():
         "email": email_digitado.lower(), 
         "telefone": formata_telefone(telefone)
     }
-
-
 def adicionar_dependentes():
     st.subheader("👶 Adicionar Dependente")
     st.write(f"Nome Responsável: {st.session_state.colaborador['Nome']}")
@@ -756,6 +774,15 @@ def adicionar_dependentes():
     if not salvar:
         return None
 
+    if not verificar_limite_clique("valida_dependente", 5):
+        return None
+    
+    # Valida e paralisa a execução IMEDIATAMENTE se faltar arquivo ou for inválido
+    valido_cert = validar_arquivo(certidao, "Certidão/RG da Criança")
+    valido_decl = validar_arquivo(declaracao_escolar, "Declaração Escolar")
+    if not (valido_cert and valido_decl):
+        st.stop()
+
     erros = []
     if not nome_filho.strip(): erros.append("❌ Nome da criança é obrigatório.")
     elif len(nome_filho.strip()) < 3: erros.append("❌ Nome muito curto.")
@@ -778,15 +805,24 @@ def adicionar_dependentes():
             return None
 
         # =========================================================
-        # 💡 CURTO-CIRCUITO: SE O USUÁRIO JÁ MARCOU BYPASS, PULA A IA!
+        # UPLOAD DE MULTIPLOS DOCUMENTOS PARA A QUARENTENA DO RH (BYPASS)
         # =========================================================
         if forcar_envio_rh:
             with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
                 cracha_colab = st.session_state.colaborador['Crachá']
                 
-                # Sobe o documento relevante (Declaração Escolar ou Certidão)
                 try:
-                    url_doc = upload_documento_supabase(declaracao_escolar, "declaracao_escolar", cracha_colab)
+                    urls = []
+                    if certidao:
+                        u_identidade = upload_documento_supabase(certidao, "identidade", cracha_colab)
+                        if u_identidade:
+                            urls.append(u_identidade)
+                    if declaracao_escolar:
+                        u_declaracao = upload_documento_supabase(declaracao_escolar, "declaracao", cracha_colab)
+                        if u_declaracao:
+                            urls.append(u_declaracao)
+                    
+                    url_doc = ",".join(urls) if urls else None
                 except Exception as e:
                     url_doc = None
             
@@ -807,15 +843,15 @@ def adicionar_dependentes():
                 "Ano_escolar": st.session_state.ano_escolar,
                 "revisao_rh": "Revisão Manual (Bypass Usuário)",
                 "Fluxo_Documento": "A1 - Identidade (Cert/RG) + Declaração Escolar (Filho Biológico)",
-                "motivo_reprova_ia": f"Causa do erro: {erro_salvo}",
-                "url_documento": url_doc,
                 "aceite_ia": aceite_ia,
                 "aceite_lgpd": aceite_lgpd,
-                "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "motivo_reprova_ia": f"Forçado pelo usuário. Erro original: {erro_salvo}", 
+                "url_documento": url_doc
             }
 
         # =========================================================
-        # FLUXO NORMAL (Primeira tentativa com a IA)
+        # FLUXO NORMAL (Análise e Validação com a IA)
         # =========================================================
         with st.spinner("🔍 Analisando documento de identidade, aguarde..."):
             dados_certidao, erro_api = analisa_certidao(certidao)
@@ -840,7 +876,9 @@ def adicionar_dependentes():
             st.session_state.erro_ia_a1 = erro_declaracao
             st.rerun()
 
-        declaracao_ok, msg_declaracao, status_rh_decl = valida_declaracao_escolar(
+        
+       
+        declaracao_ok, msg_declaracao, status_rh_decl, motivo_rh_detalhado = valida_declaracao_escolar(
             dados_declaracao, dados_certidao.get("nome_crianca") or nome_filho
         )
 
@@ -856,10 +894,16 @@ def adicionar_dependentes():
             st.session_state.erro_ia_a1 = mensagem_erro_atual
             st.rerun() # Recarrega a tela exibindo o checkbox de bypass
 
-        # Sucesso absoluto da IA
+        # Sucesso da validação da IA
         st.session_state.erro_ia_a1 = None
-        st.success("✅ Documento validado com sucesso pela IA!")
-        time.sleep(1.5)
+        
+        # 🎯 EXIBIÇÃO DO AVISO DE QUARENTENA / APROVAÇÃO DIRETA
+        if status_rh_decl and str(status_rh_decl).startswith("Sim"):
+            st.warning(f"⚠️ **Aviso de Cadastro:** {msg_declaracao}")
+            time.sleep(3.5)  # Dá tempo do colaborador ler a mensagem antes do rerun
+        else:
+            st.success("✅ Documento validado com sucesso pela IA!")
+            time.sleep(1.5)
 
         nome_final = padroniza_texto(dados_certidao.get("nome_crianca") or nome_filho)
         return {
@@ -872,7 +916,7 @@ def adicionar_dependentes():
             "Ano_escolar": st.session_state.ano_escolar,
             "revisao_rh": status_rh_decl,  
             "Fluxo_Documento": "A1 - Identidade (Cert/RG) + Declaração Escolar (Filho Biológico)",
-            "motivo_reprova_ia": None,
+            "motivo_reprova_ia": motivo_rh_detalhado,  # 🎯 Grava o motivo exato do RH no banco
             "url_documento": None,
             "aceite_ia": aceite_ia,
             "aceite_lgpd": aceite_lgpd,
@@ -883,11 +927,6 @@ def adicionar_dependentes():
         db.close()
 
 
-def ficha_colaborador():
-    print("Exibindo ficha do colaborador...")
-    # Código para exibir a ficha do colaborador
-    # Exemplo: renderização de interface, exibição de dados, etc.
-    pass
 
 #---------------------------------------------------FUNCOES DE VALIDACAO input
 def editar_kits_existentes(id_colaborador):
@@ -898,6 +937,9 @@ def editar_kits_existentes(id_colaborador):
     try:
         dependentes = db.query(Dependente).filter(Dependente.id_colaborador == id_colaborador).all()
         catalogo, base_url = catalogo_kits_por_escolaridade()
+        if not base_url:
+            st.error("⚠️ Erro crítico: A variável `BASE_URL_IMAGENS_KITS` não está definida no arquivo .env.")
+            return None
         
         # Injeção de CSS para padronizar altura das imagens do catálogo
         st.markdown("""
@@ -1066,6 +1108,89 @@ def padroniza_texto(texto):
     texto = re.sub(r'\s+', ' ', texto)       # Remove espaços duplos
     return texto
 
+def compara_nomes_flexivel(nome_a: str, nome_b: str) -> bool:
+    """
+    Compara dois nomes aceitando sobrenomes extras (casamento) e abreviações, 
+    sem comprometer a segurança.
+    """
+    if not nome_a or not nome_b:
+        return False
+
+    # Lista de preposições comuns para descartar da comparação
+    preposicoes = {"DE", "DA", "DO", "DAS", "DOS", "E"}
+
+    def extrai_tokens(nome):
+        # Usa a sua função padroniza_texto para tirar acentos e deixar maiúsculo
+        nome_limpo = padroniza_texto(nome)
+        return [p for p in nome_limpo.split() if p not in preposicoes]
+
+    tokens_a = extrai_tokens(nome_a)
+    tokens_b = extrai_tokens(nome_b)
+
+    if not tokens_a or not tokens_b:
+        return False
+
+    # REGRA DE OURO DA SEGURANÇA: O primeiro nome TEM que bater ou ser compatível.
+    # Ex: 'LUCILENE' == 'LUCILENE'
+    def token_compativel(t1, t2):
+        if t1 == t2: return True
+        if len(t1) == 1 and t2.startswith(t1): return True
+        if len(t2) == 1 and t1.startswith(t2): return True
+        return False
+
+    if not token_compativel(tokens_a[0], tokens_b[0]):
+        return False
+
+    # REGRA DE SOBRENOME: Conta quantos tokens de 'A' batem com tokens de 'B'
+    matches = 0
+    for ta in tokens_a:
+        for tb in tokens_b:
+            if token_compativel(ta, tb):
+                matches += 1
+                break  # Bateu um, vai para o próximo token de 'A'
+
+    # Se bateu o primeiro nome e pelo menos mais um sobrenome (matches >= 2), 
+    # OU se um nome for muito curto e estiver 100% contido no outro, é a mesma pessoa.
+    tamanho_menor = min(len(tokens_a), len(tokens_b))
+    
+    if matches >= 2 or matches == tamanho_menor:
+        return True
+    return False
+
+
+
+
+
+def validar_arquivo(arquivo, nome_campo: str) -> bool:
+    """
+    Valida se o arquivo enviado atende aos critérios de tamanho e formato.
+    Retorna True se estiver válido e False se houver violação.
+    """
+    if arquivo is None:
+        return True
+
+    # 1. Validação de Tamanho (convertendo bytes para MB)
+    tamanho_mb = arquivo.size / (1024 * 1024)
+    if tamanho_mb > TAMANHO_MAXIMO_MB:
+        st.error(
+            f"⚠️ O arquivo anexado no campo **'{nome_campo}'** excede o limite permitido de {TAMANHO_MAXIMO_MB} MB "
+            f"(Tamanho atual: {tamanho_mb:.1f} MB). Por favor, reduza o tamanho do arquivo."
+        )
+        return False
+
+    # 2. Validação de Extensão
+    extensao = arquivo.name.split(".")[-1].lower()
+    if extensao not in EXTENSOES_PERMITIDAS:
+        st.error(
+            f"⚠️ Formato inválido no campo **'{nome_campo}'**. "
+            f"Formatos aceitos: {', '.join(EXTENSOES_PERMITIDAS).upper()}."
+        )
+        return False
+
+    return True
+
+
+
 def valida_telefone(telefone):
     """
     Valida telefone brasileiro (celular ou fixo).
@@ -1225,8 +1350,11 @@ def valida_dados_crianca_certidao(dados_certidao: dict, nome_informado: str, dat
 
 
 def catalogo_kits_por_escolaridade():
-    # URL pública do Storage no Supabase
-    BASE_URL = "https://shmjscmivtujhrcjeicn.supabase.co/storage/v1/object/public/imagens/"
+    BASE_URL = os.getenv("BASE_URL_IMAGENS_KITS")
+    
+    if not BASE_URL:
+        st.error("⚠️ A variável `BASE_URL_IMAGENS_KITS` não está configurada no arquivo .env!")
+        return {}, ""
     
     kits_infantil = ["Dinossauro", "Abelha", "Borboleta", "Unicornio", "Cachorro"]
     kits_efi = [f"EFI-{i}" for i in range(1, 12)]
@@ -1240,7 +1368,6 @@ def catalogo_kits_por_escolaridade():
         "Ensino Médio": kits_em,
         "Ensino Superior / Técnico": kits_em
     }, BASE_URL
-
 
 def escolher_kits_colaborador():
     st.divider()
@@ -1447,78 +1574,89 @@ def gerar_qrcode(conteudo_qrcode):
 
 
 
+def _get_s3_client():
+    """Instancia o client do S3 usando as credenciais do arquivo .env."""
+    return boto3.client(
+        "s3",
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        region_name=os.getenv("AWS_REGION"),
+    )
+
+
 def upload_documento_supabase(arquivo_buffer, tipo_documento, cracha) -> str | None:
-    """Faz upload do documento de revisão para o bucket do Supabase."""
-    
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+    """Faz upload do documento de revisão para o bucket S3 (AWS)."""
+
     BASE_URL_DOCUMENTO_ANALISE = os.getenv("BASE_URL_DOCUMENTO_ANALISE")
-    
-    # Instancia o client da mesma forma segura que o QR Code faz
-    supabase_storage = create_client(SUPABASE_URL, SUPABASE_KEY)
-    BUCKET_DOCS = "Documentos_Revisao"
+    BUCKET_DOCS = os.getenv("S3_BUCKET_DOCS")
+
+    s3_client = _get_s3_client()
 
     # Gera o nome seguindo o padrão exigido
     hash_curto = uuid.uuid4().hex[:6]
     extensao = arquivo_buffer.name.split('.')[-1]
     nome_arquivo = f"{tipo_documento}-{cracha}-{hash_curto}.{extensao}"
-    
+
     arquivo_buffer.seek(0)
-    
+
     try:
-        supabase_storage.storage.from_(BUCKET_DOCS).upload(
-            path=nome_arquivo,
-            file=arquivo_buffer.read(),
-            file_options={"content-type": arquivo_buffer.type, "upsert": "true"}
+        s3_client.put_object(
+            Bucket=BUCKET_DOCS,
+            Key=nome_arquivo,
+            Body=arquivo_buffer.read(),
+            ContentType=arquivo_buffer.type,
         )
-        
+
         # Retorna a URL montada perfeitamente usando a variável do .env
         return f"{BASE_URL_DOCUMENTO_ANALISE}{nome_arquivo}"
-        
-    except Exception as e:
-        print(f"❌ Erro ao salvar documento no bucket do Supabase: {e}")
+
+    except ClientError as e:
+        print(f"❌ Erro ao salvar documento no bucket S3: {e}")
         return None
     finally:
         arquivo_buffer.seek(0)
 def salvar_qrcode_bucket(buffer_qrcode: BytesIO, cracha: str) -> str | None:
-    """Faz upload do QR Code para o bucket do Supabase, usando o crachá como nome do arquivo."""
+    """Faz upload do QR Code para o bucket S3 (AWS), usando o crachá como nome do arquivo."""
 
-    SUPABASE_URL = os.getenv("SUPABASE_URL") 
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY") 
-    BASE_URL_QRCODE = os.getenv("BASE_URL_QRCODE") 
+    BASE_URL_QRCODE = os.getenv("BASE_URL_QRCODE")
+    BUCKET_QRCODES = os.getenv("S3_BUCKET_QRCODES")
 
-    
-    supabase_storage = create_client(SUPABASE_URL, SUPABASE_KEY)
-    BUCKET_QRCODES = "QRCODE"
+    s3_client = _get_s3_client()
 
     nome_arquivo = f"{cracha}.png"
     buffer_qrcode.seek(0)
-    
+
     try:
-        supabase_storage.storage.from_(BUCKET_QRCODES).upload(
-            path=nome_arquivo,
-            file=buffer_qrcode.read(),
-            file_options={"content-type": "image/png", "upsert": "true"}
+        s3_client.put_object(
+            Bucket=BUCKET_QRCODES,
+            Key=nome_arquivo,
+            Body=buffer_qrcode.read(),
+            ContentType="image/png",
         )
         # Monta o link perfeitamente: url_pasta + nome_do_arquivo
         return f"{BASE_URL_QRCODE}{nome_arquivo}"
-        
-    except Exception as e:
-        print(f"❌ Erro ao salvar QR Code no bucket do Supabase: {e}")
+
+    except ClientError as e:
+        print(f"❌ Erro ao salvar QR Code no bucket S3: {e}")
         return None
     finally:
         buffer_qrcode.seek(0)
 
 
-def enviar_qrcode_por_email(email_destino: str, buffer_qrcode: BytesIO, cracha: str) -> bool:
-    """Envia o QR Code de retirada por e-mail ao colaborador."""
+def enviar_qrcode_por_email(email_destino: str, buffer_qrcode: BytesIO, cracha: str, codigo_retirada: str) -> bool:
+    """Envia o QR Code de retirada por e-mail ao colaborador, junto com o código de retirada."""
     notificador = NotificadorEmail(SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY)
     remetente = EMAIL_REMETENTE if EMAIL_REMETENTE else LOGIN_SMTP
     sucesso = notificador.disparar(
         remetente=remetente,
         destinatarios=email_destino,
         assunto="Seu QR Code - Retirada do Kit Escolar Funfarme",
-        corpo="Olá! Segue em anexo o QR Code para retirada do seu Kit Escolar.",
+        corpo=(
+            "Olá! Segue em anexo o QR Code para retirada do seu Kit Escolar.\n\n"
+            f"Código de retirada: {codigo_retirada}\n\n"
+            "Caso não seja possível apresentar o QR Code no momento da retirada, "
+            "este código também pode ser informado."
+        ),
         anexo=buffer_qrcode,
         nome_anexo=f"qrcode_retirada_{cracha}.png"
     )
@@ -1622,7 +1760,7 @@ def exibir_qrcode_final():
             salvar_qrcode_bucket(imagem_qrcode, cracha)
             
             # Dispara o Email
-            sucesso_email = enviar_qrcode_por_email(retirada["Email"], imagem_qrcode, cracha)
+            sucesso_email = enviar_qrcode_por_email(retirada["Email"], imagem_qrcode, cracha, retirada["Codigo_Retirada"])
             
             if sucesso_email:
                 st.success("✅ Cópia enviada para o seu e-mail!")
@@ -1635,6 +1773,9 @@ def exibir_qrcode_final():
 
 
 #------------------------------------------------------------PAINEL DE CONTROLE------------------------------------------------------------------------
+# ============================================================
+# CÓDIGO CORRIGIDO DA FUNÇÃO INTERFACE
+# ============================================================
 def interface():
     st.set_page_config(page_title='Funfarme - Kit Escolar', page_icon='🎒', layout="wide")
     st.title('🎒 Funfarme - Kit Escolar')
@@ -1648,6 +1789,10 @@ def interface():
     # Inicializa todos os estados necessários ---
     if 'colaborador' not in st.session_state:
         st.session_state.colaborador = None
+    if 'autenticado_totp' not in st.session_state:
+        st.session_state.autenticado_totp = False 
+    if 'acao_retorno' not in st.session_state:        
+        st.session_state.acao_retorno = None            
     if 'contato' not in st.session_state:
         st.session_state.contato = None
     if 'tipo_fluxo' not in st.session_state:
@@ -1720,14 +1865,33 @@ def interface():
 
     # ===================== FASE 1: BUSCA E CONTATO =====================
     if st.session_state.contato is None:
-        st.write('Informe seu crachá e clique em Buscar Colaborador.')
         
-        colaborador = busca_colaborador()
-        if colaborador is not None:
-            st.session_state.colaborador = colaborador
+        # 1. Se ainda não buscou o colaborador, mostra o formulário de busca
+        if st.session_state.colaborador is None:
+            st.write('Informe seu crachá e clique em Buscar Colaborador.')
+            colaborador = busca_colaborador()
+            if colaborador is not None:
+                st.session_state.colaborador = colaborador
+                st.rerun() 
+            return
 
-        if st.session_state.colaborador is not None:
-            if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
+        # 2. TRAVA DE SEGURANÇA 2FA
+        if not st.session_state.autenticado_totp:
+            if verificar_autenticacao_totp(st.session_state.colaborador, SessionLocal().bind):
+                st.session_state.autenticado_totp = True
+                st.rerun() 
+            st.stop() 
+
+        # 3. FICHA DO COLABORADOR E KITS EXISTENTES
+        st.divider()
+        st.subheader("📋 Ficha do Colaborador")
+        st.text_input("Nome Completo", value=st.session_state.colaborador['Nome'], disabled=True)
+        st.text_input("Cargo", value=st.session_state.colaborador['Título Reduzido (Cargo)'] or "", disabled=True)
+        st.text_input("Situação", value=st.session_state.colaborador['Descrição (Situação)'] or "", disabled=True)
+
+        if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
+            # Se a ação for "adicionar_dependente", pula o bloqueio de dependentes existentes
+            if st.session_state.acao_retorno != "adicionar_dependente":
                 db = SessionLocal()
                 try:
                     dependentes_existentes = db.query(Dependente).filter(
@@ -1735,22 +1899,107 @@ def interface():
                     ).all()
                     
                     if dependentes_existentes and len(st.session_state.lista_dependentes) == 0:
-                        st.warning("⚠️ Teu crachá já tem dependentes atrelados a ele.")
-                        editar_kits_existentes(st.session_state.colaborador['id'])
-                        return  
+                        st.warning("⚠️ O seu crachá já tem dependentes atrelados a ele.")
+                        
+                        # Verifica se TODOS os dependentes foram aprovados (revisao_rh começa com "Não")
+                        aprovado = all(d.revisao_rh and str(d.revisao_rh).strip().startswith("Não") for d in dependentes_existentes)
+                        
+                        if not aprovado:
+                            st.info("🕒 **STATUS: A DOCUMENTAÇÃO ESTÁ SENDO ANALISADA PELO RH**")
+                            st.write("EM BREVE CHEGARÁ UM E-MAIL COM MAIS ORIENTAÇÃO.")
+                            
+                            # ➕ Botão liberado para adicionar novos dependentes enquanto aguarda o RH
+                            if st.button("➕ Adicionar Mais dependentes", use_container_width=True):
+                                st.session_state.acao_retorno = "adicionar_dependente"
+                                st.rerun()
+                                
+                            # Interrompe o fluxo aqui para não exibir as opções de Mudar Kit/QR Code
+                            if st.session_state.acao_retorno != "adicionar_dependente":
+                                return 
+                        else:
+                            st.success("✅ **STATUS: APROVADO**")
+                            
+                            # Renderiza os 3 botões em colunas
+                            col1, col2, col3 = st.columns(3)
+                            with col1:
+                                if st.button("🎒 Mudar escolha do Kit", use_container_width=True):
+                                    st.session_state.acao_retorno = "mudar_kit"
+                                    st.rerun()
+                            with col2:
+                                if st.button("➕ Adicionar Mais dependentes", use_container_width=True):
+                                    st.session_state.acao_retorno = "adicionar_dependente"
+                                    st.rerun()
+                            with col3:
+                                if st.button("🎟️ Buscar QRCODE", use_container_width=True):
+                                    st.session_state.acao_retorno = "ver_qrcode"
+                                    st.rerun()
+
+                            # Lógica de navegação baseada no botão clicado
+                            if st.session_state.acao_retorno == "mudar_kit":
+                                editar_kits_existentes(st.session_state.colaborador['id'])
+                                return
+                                
+                            elif st.session_state.acao_retorno == "ver_qrcode":
+                                st.divider()
+                                st.subheader("🎟️ Seu QR Code de Retirada")
+                                base_url_qr = os.getenv("BASE_URL_QRCODE", "")
+                                
+                                if not base_url_qr:
+                                    st.error("⚠️ ERRO DE CONFIGURAÇÃO: A variável `BASE_URL_QRCODE` não está configurada no arquivo .env.")
+                                    return
+                                    
+                                cracha_str = str(st.session_state.colaborador['id'])
+                                if not base_url_qr.endswith("/"):
+                                    base_url_qr += "/"
+                                    
+                                url_qr = f"{base_url_qr}{cracha_str}.png"
+                                
+                                try:
+                                    st.image(url_qr, width=300, caption="Apresente este QR Code no dia da retirada.")
+                                    st.markdown(f"📥 [Clique aqui para baixar o seu QR Code diretamente]({url_qr})")
+                                except Exception:
+                                    st.error("⚠️ A imagem do QR Code ainda não foi encontrada no servidor em nuvem.")
+                                return
+                                
+                            else:
+                                return
                 finally:
                     db.close()
 
-            contato = adiciona_dados_contato()
-            if contato is not None:
-                st.session_state.contato = contato
-                st.rerun()
-    
+        # 4. FORMULÁRIO DE CONTATO
+        email_salvo = ""
+        telefone_salvo = ""
+
+        db = SessionLocal()
+        try:
+            retirada_existente = db.query(Retirada).filter(
+                Retirada.id_colaborador == st.session_state.colaborador['id']
+            ).first()
+
+            if retirada_existente:
+                email_salvo = retirada_existente.email or ""
+                telefone_salvo = retirada_existente.telefone or ""
+                # CORREÇÃO: Não define st.session_state.contato aqui para não saltar o formulário!
+        finally:
+            db.close()
+
+        chave_unica_form = f"form_contato_{st.session_state.colaborador['id']}"
+
+        contato = adiciona_dados_contato(
+            email_padrao=email_salvo, 
+            telefone_padrao=telefone_salvo,
+            form_key=chave_unica_form
+        )
+        if contato is not None:
+            st.session_state.contato = contato
+            st.rerun()
+
+    # ===================== FASE 2: TRIAGEM DE VÍNCULO =====================
     else:
-        # ===================== FASE 2: TRIAGEM DE VÍNCULO =====================
         st.success(f"👤 Colaborador: {st.session_state.colaborador['Nome']} | ✅ Contato salvo.")
 
-        if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado:
+        # CORREÇÃO: Pula este bloqueio se o usuário clicou em adicionar mais dependentes
+        if not st.session_state.escolhendo_kits and not st.session_state.cadastro_finalizado and st.session_state.acao_retorno != "adicionar_dependente":
             db = SessionLocal()
             try:
                 dependentes_existentes = db.query(Dependente).filter(Dependente.id_colaborador == st.session_state.colaborador['id']).all()
@@ -1786,6 +2035,7 @@ def interface():
                 st.rerun()
             return
 
+        # Restante do código dos fluxos A, B, C mantido sem alter
         if st.session_state.aguardando_decisao:
             st.divider()
             st.subheader("✅ Item adicionado ao carrinho com sucesso!")
@@ -1888,6 +2138,12 @@ def interface():
                 salvar_est = st.form_submit_button("Validar e Adicionar ao Carrinho")
 
             if salvar_est:
+                if not verificar_limite_clique("valida_estagiario", 5):
+                    st.stop()
+                valido_cert = validar_arquivo(certidao_est, "Certidão/RG do Estagiário")
+                if not valido_cert:
+                    st.stop()
+
                 erros_est = []
                 if not genero_est: erros_est.append("O gênero é obrigatório.")
                 if not st.session_state.escolaridade: erros_est.append("A escolaridade é obrigatória.")
@@ -2008,6 +2264,12 @@ def interface():
                             salvar_a2 = st.form_submit_button("Validar e Adicionar ao Carrinho (A2)")
 
                         if salvar_a2:
+                            if not verificar_limite_clique("valida_a2", 5):
+                                st.stop()
+                            valido_cert = validar_arquivo(certidao_averbada, "Certidão com Averbação")
+                            valido_decl = validar_arquivo(declaracao_escolar_a2, "Declaração Escolar")
+                            if not (valido_cert and valido_decl):
+                                st.stop()
                             erros_a2 = []
                             if not nome_filho_a2.strip(): erros_a2.append("O nome da criança é obrigatório.")
                             if not genero_a2: erros_a2.append("O gênero é obrigatório.")
@@ -2022,8 +2284,16 @@ def interface():
                             else:
                                 if forcar_envio_rh_a2:
                                     with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                        cracha_colab = st.session_state.colaborador['Crachá']
                                         try:
-                                            url_doc_a2 = upload_documento_supabase(declaracao_escolar_a2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                            urls = []
+                                            if certidao_averbada:
+                                                u1 = upload_documento_supabase(certidao_averbada, "certidao_averbada", cracha_colab)
+                                                if u1: urls.append(u1)
+                                            if declaracao_escolar_a2:
+                                                u2 = upload_documento_supabase(declaracao_escolar_a2, "declaracao", cracha_colab)
+                                                if u2: urls.append(u2)
+                                            url_doc_a2 = ",".join(urls) if urls else None
                                         except Exception:
                                             url_doc_a2 = None
 
@@ -2082,14 +2352,18 @@ def interface():
                                                     st.session_state.erro_ia_a2 = err_decl_a2
                                                     st.rerun()
                                                 else:
-                                                    decl_ok_a2, msg_decl_a2, status_rh_a2 = valida_declaracao_escolar(
+                                                    decl_ok_a2, msg_decl_a2, status_rh_a2, motivo_rh_a2 = valida_declaracao_escolar(
                                                         dados_decl_a2, dados_a2.get("nome_crianca") or nome_filho_a2
                                                     )
-                                                    
+
                                                     if not decl_ok_a2:
                                                         st.session_state.erro_ia_a2 = msg_decl_a2
                                                         st.rerun()
                                                     else:
+                                                        if status_rh_a2 and str(status_rh_a2).startswith("Sim"):
+                                                            st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_a2}")
+                                                            time.sleep(3.5)
+                                                        
                                                         nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
                                                         pais_responsaveis = [padroniza_texto(p) for p in dados_a2.get("nomes_pais_responsaveis", [])]
 
@@ -2119,7 +2393,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_a2,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -2148,6 +2422,12 @@ def interface():
                             salvar_a3 = st.form_submit_button("Validar e Adicionar ao Carrinho (A3)")
 
                         if salvar_a3:
+                            if not verificar_limite_clique("valida_a3", 5):
+                                st.stop()
+                            valido_doc = validar_arquivo(doc_judicial, "Documento Judicial")
+                            if not valido_doc:
+                                st.stop()
+
                             erros_a3 = []
                             if not nome_filho_a3.strip(): erros_a3.append("O nome da criança é obrigatório.")
                             if not st.session_state.escolaridade: erros_a3.append("A escolaridade é obrigatória.")
@@ -2287,8 +2567,6 @@ def interface():
                         nome_filho_b = st.text_input("Nome Completo da Criança")
                         genero_b = st.selectbox("Gênero:", ["", "Masculino", "Feminino"], format_func=lambda x: "Selecione o Gênero..." if x == "" else x)
                         data_nascimento_b = st.date_input("Data de Nascimento da Criança", min_value=date(2000, 1, 1), max_value=date.today() - timedelta(days=730), format="DD/MM/YYYY")
-                        
-                        # 📝 Rótulo atualizado para explicitar que aceita ambos os documentos
                         certidao_b = st.file_uploader("Anexar Certidão de Nascimento ou RG da Criança", type=["pdf", "png", "jpg", "jpeg"], key="cert_b1", help="Aceita Certidão de Nascimento ou RG (com a filiação/verso visível).")
                         uniao_b = st.file_uploader("Anexar União Estável (com firma reconhecida e Selo do Cartório)", type=["pdf", "png", "jpg", "jpeg"], key="doc_b1")
                         declaracao_escolar_b1 = st.file_uploader("Anexar Declaração Escolar de Matrícula 📚", type=["pdf", "png", "jpg", "jpeg"], key="declaracao_escolar_b1")
@@ -2304,6 +2582,16 @@ def interface():
                         salvar_b1 = st.form_submit_button("Validar e Adicionar ao Carrinho (B1)")
 
                     if salvar_b1:
+                        if not verificar_limite_clique("valida_b1", 5):
+                            st.stop()
+                        # --- INÍCIO DA VALIDAÇÃO DE ARQUIVOS ---
+                        valido_cert = validar_arquivo(certidao_b, "Certidão/RG da Criança")
+                        valido_uniao = validar_arquivo(uniao_b, "Declaração de União Estável")
+                        valido_decl = validar_arquivo(declaracao_escolar_b1, "Declaração Escolar")  
+
+                        if not (valido_cert and valido_uniao and valido_decl):
+                            st.stop()  
+                            
                         erros_b = []
                         if not nome_filho_b.strip(): erros_b.append("O nome da criança é obrigatório.")
                         if not genero_b: erros_b.append("O gênero é obrigatório.")
@@ -2319,8 +2607,19 @@ def interface():
                         else:
                             if forcar_envio_rh_b1:
                                 with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                    cracha_colab = st.session_state.colaborador['Crachá']
                                     try:
-                                        url_doc_b1 = upload_documento_supabase(declaracao_escolar_b1, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                        urls = []
+                                        if certidao_b:
+                                            u1 = upload_documento_supabase(certidao_b, "identidade", cracha_colab)
+                                            if u1: urls.append(u1)
+                                        if uniao_b:
+                                            u2 = upload_documento_supabase(uniao_b, "uniao_estavel", cracha_colab)
+                                            if u2: urls.append(u2)
+                                        if declaracao_escolar_b1:
+                                            u3 = upload_documento_supabase(declaracao_escolar_b1, "declaracao", cracha_colab)
+                                            if u3: urls.append(u3)
+                                        url_doc_b1 = ",".join(urls) if urls else None
                                     except Exception:
                                         url_doc_b1 = None
 
@@ -2384,7 +2683,7 @@ def interface():
                                                 st.session_state.erro_ia_b1 = err_decl_b1
                                                 st.rerun()
                                             else:
-                                                decl_ok_b1, msg_decl_b1, status_rh_b1 = valida_declaracao_escolar(
+                                                decl_ok_b1, msg_decl_b1, status_rh_b1, motivo_rh_b1 = valida_declaracao_escolar(
                                                     dados_decl_b1, dados_cert.get("nome_crianca") or nome_filho_b
                                                 )
                                                 
@@ -2392,6 +2691,10 @@ def interface():
                                                     st.session_state.erro_ia_b1 = msg_decl_b1
                                                     st.rerun()
                                                 else:
+                                                    if status_rh_b1 and str(status_rh_b1).startswith("Sim"):
+                                                        st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_b1}")
+                                                        time.sleep(3.5)
+
                                                     dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
                                                     
                                                     if err_uniao:
@@ -2436,7 +2739,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_b1,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -2468,6 +2771,14 @@ def interface():
                         salvar_b2 = st.form_submit_button("Validar e Adicionar ao Carrinho (B2)")
 
                     if salvar_b2:
+                        if not verificar_limite_clique("valida_b2", 5):
+                            st.stop()
+                        valido_cert = validar_arquivo(certidao_b2, "Certidão/RG da Criança")
+                        valido_casam = validar_arquivo(casamento_b2, "Certidão de Casamento")
+                        valido_decl = validar_arquivo(declaracao_escolar_b2, "Declaração Escolar")
+                        if not (valido_cert and valido_casam and valido_decl):
+                            st.stop()
+
                         erros_b2 = []
                         if not nome_filho_b2.strip(): erros_b2.append("O nome da criança é obrigatório.")
                         if not genero_b2: erros_b2.append("O gênero é obrigatório.")
@@ -2483,8 +2794,19 @@ def interface():
                         else:
                             if forcar_envio_rh_b2:
                                 with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                    cracha_colab = st.session_state.colaborador['Crachá']
                                     try:
-                                        url_doc_b2 = upload_documento_supabase(declaracao_escolar_b2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                        urls = []
+                                        if certidao_b2:
+                                            u1 = upload_documento_supabase(certidao_b2, "identidade", cracha_colab)
+                                            if u1: urls.append(u1)
+                                        if casamento_b2:
+                                            u2 = upload_documento_supabase(casamento_b2, "casamento", cracha_colab)
+                                            if u2: urls.append(u2)
+                                        if declaracao_escolar_b2:
+                                            u3 = upload_documento_supabase(declaracao_escolar_b2, "declaracao", cracha_colab)
+                                            if u3: urls.append(u3)
+                                        url_doc_b2 = ",".join(urls) if urls else None
                                     except Exception:
                                         url_doc_b2 = None
 
@@ -2547,7 +2869,7 @@ def interface():
                                                 st.session_state.erro_ia_b2 = err_decl_b2
                                                 st.rerun()
                                             else:
-                                                decl_ok_b2, msg_decl_b2, status_rh_b2 = valida_declaracao_escolar(
+                                                decl_ok_b2, msg_decl_b2, status_rh_b2, motivo_rh_b2 = valida_declaracao_escolar(
                                                     dados_decl_b2, dados_cert.get("nome_crianca") or nome_filho_b2
                                                 )
                                                 
@@ -2555,6 +2877,9 @@ def interface():
                                                     st.session_state.erro_ia_b2 = msg_decl_b2
                                                     st.rerun()
                                                 else:
+                                                    if status_rh_b2 and str(status_rh_b2).startswith("Sim"):
+                                                        st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_b2}")
+                                                        time.sleep(3.5)
                                                     dados_casam, err_casam = analisa_certidao_complementar(casamento_b2)
                                                     
                                                     if err_casam:
@@ -2600,7 +2925,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_b2,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -2671,6 +2996,14 @@ def interface():
                         salvar_c1 = st.form_submit_button("Validar e Adicionar ao Carrinho (C1)")
 
                     if salvar_c1:
+                        if not verificar_limite_clique("valida_c1", 5):                            
+                            st.stop()
+                        valido_cert = validar_arquivo(certidao_c1, "Certidão/RG da Criança")
+                        valido_guarda = validar_arquivo(termo_guarda_c1, "Termo de Guarda")
+                        valido_decl = validar_arquivo(declaracao_escolar_c1, "Declaração Escolar")
+                        if not (valido_cert and valido_guarda and valido_decl):
+                            st.stop()
+
                         erros_c1 = []
                         if not nome_filho_c1.strip(): erros_c1.append("O nome da criança é obrigatório.")
                         if not genero_c1: erros_c1.append("O gênero é obrigatório.")
@@ -2685,8 +3018,19 @@ def interface():
                         else:
                             if forcar_envio_rh_c1:
                                 with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                    cracha_colab = st.session_state.colaborador['Crachá']
                                     try:
-                                        url_doc_c1 = upload_documento_supabase(declaracao_escolar_c1, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                        urls = []
+                                        if certidao_c1:
+                                            u1 = upload_documento_supabase(certidao_c1, "identidade", cracha_colab)
+                                            if u1: urls.append(u1)
+                                        if termo_guarda_c1:
+                                            u2 = upload_documento_supabase(termo_guarda_c1, "guarda_judicial", cracha_colab)
+                                            if u2: urls.append(u2)
+                                        if declaracao_escolar_c1:
+                                            u3 = upload_documento_supabase(declaracao_escolar_c1, "declaracao", cracha_colab)
+                                            if u3: urls.append(u3)
+                                        url_doc_c1 = ",".join(urls) if urls else None
                                     except Exception:
                                         url_doc_c1 = None
 
@@ -2749,7 +3093,7 @@ def interface():
                                                 st.session_state.erro_ia_c1 = err_decl_c1
                                                 st.rerun()
                                             else:
-                                                decl_ok_c1, msg_decl_c1, status_rh_c1 = valida_declaracao_escolar(
+                                                decl_ok_c1, msg_decl_c1, status_rh_c1, motivo_rh_c1 = valida_declaracao_escolar(
                                                     dados_decl_c1, dados_cert_c1.get("nome_crianca") or nome_filho_c1
                                                 )
                                                 
@@ -2757,6 +3101,9 @@ def interface():
                                                     st.session_state.erro_ia_c1 = msg_decl_c1
                                                     st.rerun()
                                                 else:
+                                                    if status_rh_c1 and str(status_rh_c1).startswith("Sim"):
+                                                        st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_c1}")
+                                                        time.sleep(3.5)
                                                     dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
                                                     
                                                     if err_guarda:
@@ -2802,7 +3149,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_c1,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -2835,6 +3182,14 @@ def interface():
                         salvar_c2 = st.form_submit_button("Validar e Adicionar ao Carrinho (C2)")
 
                     if salvar_c2:
+                        if not verificar_limite_clique("valida_c2", 5):
+                            st.stop()
+                        valido_cert = validar_arquivo(certidao_c2, "Certidão/RG da Criança")
+                        valido_tutela = validar_arquivo(termo_tutela_c2, "Termo de Tutela")
+                        valido_decl = validar_arquivo(declaracao_escolar_c2, "Declaração Escolar")
+                        if not (valido_cert and valido_tutela and valido_decl):
+                            st.stop()
+
                         erros_c2 = []
                         if not nome_filho_c2.strip(): erros_c2.append("O nome da criança é obrigatório.")
                         if not genero_c2: erros_c2.append("O gênero é obrigatório.")
@@ -2849,8 +3204,19 @@ def interface():
                         else:
                             if forcar_envio_rh_c2:
                                 with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                    cracha_colab = st.session_state.colaborador['Crachá']
                                     try:
-                                        url_doc_c2 = upload_documento_supabase(declaracao_escolar_c2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                        urls = []
+                                        if certidao_c2:
+                                            u1 = upload_documento_supabase(certidao_c2, "identidade", cracha_colab)
+                                            if u1: urls.append(u1)
+                                        if termo_tutela_c2:
+                                            u2 = upload_documento_supabase(termo_tutela_c2, "tutela_judicial", cracha_colab)
+                                            if u2: urls.append(u2)
+                                        if declaracao_escolar_c2:
+                                            u3 = upload_documento_supabase(declaracao_escolar_c2, "declaracao", cracha_colab)
+                                            if u3: urls.append(u3)
+                                        url_doc_c2 = ",".join(urls) if urls else None
                                     except Exception:
                                         url_doc_c2 = None
 
@@ -2913,7 +3279,7 @@ def interface():
                                                 st.session_state.erro_ia_c2 = err_decl_c2
                                                 st.rerun()
                                             else:
-                                                decl_ok_c2, msg_decl_c2, status_rh_c2 = valida_declaracao_escolar(
+                                                decl_ok_c2, msg_decl_c2, status_rh_c2, motivo_rh_c2 = valida_declaracao_escolar(
                                                     dados_decl_c2, dados_cert_c2.get("nome_crianca") or nome_filho_c2
                                                 )
                                                 
@@ -2921,6 +3287,9 @@ def interface():
                                                     st.session_state.erro_ia_c2 = msg_decl_c2
                                                     st.rerun()
                                                 else:
+                                                    if status_rh_c2 and str(status_rh_c2).startswith("Sim"):
+                                                        st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_c2}")
+                                                        time.sleep(3.5)
                                                     dados_tutela, err_tutela = analisa_tutela_judicial(termo_tutela_c2)
                                                     
                                                     if err_tutela:
@@ -2966,7 +3335,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_c2,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -2974,4 +3343,4 @@ def interface():
                                                                     st.rerun()
                                                             finally:
                                                                 db.close()
-interface()                                                              
+interface()

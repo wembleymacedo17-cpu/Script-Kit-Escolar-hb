@@ -1,9 +1,11 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
+
 
 # ===================== CONFIGURAÇÃO =====================
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -33,20 +35,29 @@ Base = declarative_base()
 
 class Colaborador(Base):
     __tablename__ = "colaboradores"
+    __table_args__ = {'extend_existing': True}
+    
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     cracha = Column(BigInteger, unique=True, nullable=False)
     nome = Column(Text, nullable=False)
+    cpf = Column(String(11), nullable=True)
+    data_nascimento = Column(Date, nullable=True)
     descricao_situacao = Column(Text)
+    id_cargo = Column(BigInteger, nullable=True)
     titulo_reduzido_cargo = Column(Text)
     data_demissao = Column(Date)
     criado_em = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    situacao = Column(Integer)
+
+    totp_secret = Column(String(32), nullable=True)
+    totp_ativo = Column(Boolean, default=False)
 
     dependentes = relationship("Dependente", back_populates="colaborador", cascade="all, delete-orphan")
 
 
 class Dependente(Base):
     __tablename__ = "dependentes"
+    __table_args__ = {'extend_existing': True}
+    
     id_dependente = Column(Integer, primary_key=True, autoincrement=True)
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
     nome_filho = Column(Text, nullable=False)
@@ -59,12 +70,10 @@ class Dependente(Base):
     motivo_reprova_ia = Column(String, nullable=True)
     url_documento = Column(String, nullable=True)
 
-    # 🔒 NOVAS COLUNAS DE COMPLIANCE
     aceite_ia = Column(Boolean, default=False)
     aceite_lgpd = Column(Boolean, default=False)
     data_aceite = Column(DateTime, nullable=True)
 
-    # 🚨 ADICIONADO: Coluna para registrar o fluxo e documento utilizado
     fluxo_documento = Column(Text, nullable=True)
 
     colaborador = relationship("Colaborador", back_populates="dependentes")
@@ -73,23 +82,29 @@ class Dependente(Base):
 
 class EscolhaKit(Base):
     __tablename__ = "escolhas_kits"
+    __table_args__ = (
+        UniqueConstraint('id_dependente', name='uk_dependente_kit'),
+        {'extend_existing': True}
+    )
+    
     id_escolha = Column(Integer, primary_key=True, autoincrement=True)
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
     id_dependente = Column(Integer, ForeignKey("dependentes.id_dependente", ondelete="CASCADE"), nullable=False)
     kit_escolhido = Column(String(150), nullable=False)
     data_escolha = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-
-    # 🚨 NOVAS COLUNAS: ciência sobre variação de cor/acabamento e estoque do kit
     aceite_variacao_kit = Column(Boolean, default=False)
     data_aceite_variacao = Column(DateTime, nullable=True)
 
     dependente = relationship("Dependente", back_populates="escolha")
 
-    __table_args__ = (UniqueConstraint('id_dependente', name='uk_dependente_kit'),)
-
 
 class Retirada(Base):
     __tablename__ = "retiradas"
+    __table_args__ = (
+        CheckConstraint("status IN ('PENDENTE', 'ENTREGUE')", name='chk_status_retirada'),
+        {'extend_existing': True}
+    )
+    
     id_retirada = Column(Integer, primary_key=True, autoincrement=True)
     codigo_retirada = Column(String(255), unique=True, nullable=False)
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
@@ -101,10 +116,20 @@ class Retirada(Base):
     data_geracao = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     data_entrega = Column(DateTime)
 
-    __table_args__ = (CheckConstraint("status IN ('PENDENTE', 'ENTREGUE')", name='chk_status_retirada'),)
 
+class LogAuditoria(Base):
+    __tablename__ = "logs_auditoria"
+    __table_args__ = {'extend_existing': True}
+    
+    id_log = Column(Integer, primary_key=True, autoincrement=True)
+    cracha = Column(BigInteger, nullable=True)
+    acao = Column(String(100), nullable=False)
+    detalhes = Column(Text, nullable=True)
+    ip_origem = Column(String(50), nullable=True)
+    data_hora = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-# ===================== FUNÇÕES =====================
+# ===================== FUNÇÕES E MÉTODOS =====================
+
 def get_db():
     db = SessionLocal()
     try:
@@ -114,9 +139,124 @@ def get_db():
 
 
 def init_db():
-    """Cria as tabelas no banco"""
+    """Cria as tabelas no banco de dados"""
     Base.metadata.create_all(bind=engine)
     print("✅ Tabelas criadas ou já existentes.")
+
+
+def atualizar_colaboradores_merge(engine_db, df_oracle: pd.DataFrame):
+    """Sincroniza os dados do Senior com o Supabase usando Tabela Staging."""
+    try:
+        print("📥 Subindo carga para tabela temporária 'stg_colaboradores'...")
+        
+        df_oracle.to_sql(
+            name='stg_colaboradores',
+            con=engine_db,
+            if_exists='replace',
+            index=False,
+            chunksize=10000,
+            method='multi'
+        )
+        
+        query_upsert = """
+            INSERT INTO colaboradores (
+                cracha, 
+                nome, 
+                cpf,
+                data_nascimento,
+                descricao_situacao, 
+                id_cargo,
+                titulo_reduzido_cargo, 
+                data_demissao,
+                totp_secret, 
+                totp_ativo
+            )
+            SELECT 
+                s.cracha, 
+                s.nome, 
+                s.cpf,
+                CAST(s.data_nascimento AS DATE),
+                s.descricao_situacao, 
+                s.id_cargo,
+                s.titulo_reduzido_cargo, 
+                CAST(s.data_demissao AS DATE),
+                NULL AS totp_secret,
+                FALSE AS totp_ativo
+            FROM stg_colaboradores s
+            ON CONFLICT (cracha) DO UPDATE SET
+                nome = EXCLUDED.nome,
+                cpf = EXCLUDED.cpf,
+                data_nascimento = EXCLUDED.data_nascimento,
+                descricao_situacao = EXCLUDED.descricao_situacao,
+                id_cargo = EXCLUDED.id_cargo,
+                titulo_reduzido_cargo = EXCLUDED.titulo_reduzido_cargo,
+                data_demissao = EXCLUDED.data_demissao;
+            
+            DROP TABLE IF EXISTS stg_colaboradores;
+        """
+        
+        with engine_db.begin() as conn:
+            conn.execute(text(query_upsert))
+        print("✅ Tabela 'colaboradores' sincronizada com sucesso preservando os dados de TOTP!")
+
+    except Exception as e:
+        print(f"❌ Erro ao realizar a sincronização dos colaboradores: {e}")
+        raise e
+
+
+def obter_ip_cliente() -> str:
+    """Captura o endereço de IP real do usuário conectado ao Streamlit."""
+    try:
+        from streamlit.web.server.websocket_headers import _get_websocket_headers
+        headers = _get_websocket_headers()
+        if headers:
+            ip = headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            if not ip:
+                ip = headers.get("Remote-Addr", "")
+            if ip:
+                return ip
+    except Exception:
+        pass
+    
+    return "127.0.0.1 (Localhost)"
+
+
+def registrar_log(cracha: int, acao: str, detalhes: str = None, ip_origem: str = None):
+    """Grava um registro de auditoria salvando o IP em coluna dedicada."""
+    db = SessionLocal()
+    try:
+        ip_final = ip_origem or obter_ip_cliente()
+        novo_log = LogAuditoria(
+            cracha=cracha,
+            acao=acao,
+            detalhes=detalhes,
+            ip_origem=ip_final
+        )
+        db.add(novo_log)
+        db.commit()
+    except Exception as e:
+        print(f"❌ Erro ao gravar log de auditoria: {e}")
+    finally:
+        db.close()
+
+
+def ip_esta_bloqueado(ip_cliente: str = None, limite_falhas: int = 5, minutos: int = 15) -> bool:
+    """Verifica se o IP acumulou falhas excessivas na janela de tempo."""
+    ip_alvo = ip_cliente or obter_ip_cliente()
+    db = SessionLocal()
+    try:
+        limite_tempo = datetime.now(timezone.utc) - timedelta(minutes=minutos)
+        total_falhas = db.query(LogAuditoria).filter(
+            LogAuditoria.ip_origem == ip_alvo,
+            LogAuditoria.acao.in_(["FALHA_CONFIRMACAO_IDENTIDADE", "FALHA_ATIVACAO_TOTP", "FALHA_LOGIN_TOTP"]),
+            LogAuditoria.data_hora >= limite_tempo
+        ).count()
+        return total_falhas >= limite_falhas
+    except Exception as e:
+        print(f"⚠️ Erro ao checar bloqueio de IP: {e}")
+        return False
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

@@ -38,8 +38,9 @@ cd "C:\Users\WEMBLEY.MACEDO\Desktop\SuperMerge\Entrega-Kit-escolar" ; v
 
 streamlit run kit-colaborador.py
 streamlit run sistema.py
-
+streamlit run Revisor.py
 gemini-1.5-flash
 
 
 
+streamlit run Revisor.py --server.port 8503
