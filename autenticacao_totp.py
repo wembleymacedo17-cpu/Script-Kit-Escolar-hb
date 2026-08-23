@@ -5,6 +5,9 @@ import qrcode
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime, date
+from database import registrar_log
+
+
 def gerar_secret_totp():
     """Gera uma nova chave secreta Base32."""
     return pyotp.random_base32()
@@ -30,8 +33,9 @@ def validar_codigo_totp(secret_key: str, codigo_digitado: str) -> bool:
     totp = pyotp.TOTP(secret_limpa)
     return totp.verify(codigo_limpo, valid_window=3)
 
+
 def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
-    """Interface do Streamlit para o fluxo de TOTP com Trava de Segurança Cadastral."""
+    """Interface do Streamlit para o fluxo de TOTP com Trava Dupla e Auditoria em Log."""
     st.subheader("🔒 Validação de Segurança (2FA)")
 
     nome_colab = colaborador.get("Nome") or colaborador.get("nome") or "Colaborador"
@@ -39,13 +43,13 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
     secret_cadastrado = colaborador.get("totp_secret")
     
     data_nasc_banco = colaborador.get("data_nascimento")
+    cpf_banco = str(colaborador.get("cpf", "")).strip().zfill(11)
 
     # -------------------------------------------------------------
     # FLUXO 1: PRIMEIRO ACESSO (Confirmação de Identidade pré-QR Code)
     # -------------------------------------------------------------
     if not colaborador.get("totp_ativo") or not secret_cadastrado:
         
-        # Estado temporário para saber se a pessoa passou no teste de identidade
         if "identidade_confirmada" not in st.session_state:
             st.session_state.identidade_confirmada = False
 
@@ -55,20 +59,28 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
             with st.form("form_valida_identidade"):
                 st.write(f"Colaborador: **{nome_colab}** | Crachá: **{cracha_colab}**")
                 
-                dt_informada = st.date_input(
-                    "Informe sua Data de Nascimento para validar a titularidade:",
-                    min_value=date(1940, 1, 1),
-                    max_value=date.today(),
-                    format="DD/MM/YYYY"
-                )
+                col1, col2 = st.columns(2)
+                with col1:
+                    cpf_3_digitos = st.text_input(
+                        "3 primeiros dígitos do CPF:", 
+                        max_chars=3, 
+                        placeholder="Ex: 123",
+                        help="Digite apenas os 3 primeiros números do seu CPF"
+                    )
+                with col2:
+                    dt_informada = st.date_input(
+                        "Data de Nascimento:",
+                        min_value=date(1940, 1, 1),
+                        max_value=date.today(),
+                        format="DD/MM/YYYY"
+                    )
                 
                 btn_validar_dados = st.form_submit_button("Confirmar Identidade", type="primary", use_container_width=True)
 
             if btn_validar_dados:
+                # 1. Normalização da Data do Banco
                 data_nasc_convertida = None
-                
                 if data_nasc_banco:
-                    # Se já for um objeto date ou datetime do Python
                     if hasattr(data_nasc_banco, "date"):
                         data_nasc_convertida = data_nasc_banco.date()
                     elif isinstance(data_nasc_banco, date):
@@ -81,12 +93,29 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                             except ValueError:
                                 continue
 
-                if data_nasc_convertida and dt_informada == data_nasc_convertida:
+                # 2. Validação dos 3 primeiros dígitos do CPF
+                tres_primeiros_banco = cpf_banco[:3] if len(cpf_banco) >= 3 else ""
+                cpf_digitado_limpo = cpf_3_digitos.strip()
+
+                # 3. Cruzamento Duplo
+                valida_data = (data_nasc_convertida and dt_informada == data_nasc_convertida)
+                valida_cpf = (tres_primeiros_banco and cpf_digitado_limpo == tres_primeiros_banco)
+
+                if valida_data and valida_cpf:
                     st.session_state.identidade_confirmada = True
+                    registrar_log(cracha_colab, "CONFIRMACAO_IDENTIDADE_SUCESSO", "Data de nascimento e 3 dígitos do CPF validados com sucesso.")
                     st.success("✅ Identidade confirmada!")
                     st.rerun()
                 else:
-                    st.error("❌ Data de nascimento incorreta. O cadastro do 2FA não pôde ser liberado.")
+                    erros_identidade = []
+                    if not valida_cpf:
+                        erros_identidade.append("3 primeiros dígitos do CPF incorretos.")
+                    if not valida_data:
+                        erros_identidade.append("Data de nascimento incorreta.")
+                    
+                    msg_detalhes = " ".join(erros_identidade)
+                    registrar_log(cracha_colab, "FALHA_CONFIRMACAO_IDENTIDADE", f"Tentativa negada: {msg_detalhes}")
+                    st.error(f"❌ Falha na validação: {msg_detalhes} O cadastro do 2FA não pôde ser liberado.")
             
             return False
 
@@ -133,6 +162,8 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 colaborador["totp_secret"] = str(secret).strip()
                 colaborador["totp_ativo"] = True
                 
+                registrar_log(cracha_colab, "TOTP_ATIVADO_SUCESSO", "Primeiro acesso concluído e chave 2FA vinculada ao dispositivo.")
+
                 if "temp_totp_secret" in st.session_state:
                     del st.session_state.temp_totp_secret
                 if "identidade_confirmada" in st.session_state:
@@ -141,6 +172,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 st.success("✅ Validador configurado com sucesso!")
                 return True
             else:
+                registrar_log(cracha_colab, "FALHA_ATIVACAO_TOTP", "Código de 6 dígitos incorreto durante a tentativa de ativação.")
                 st.error("❌ Código incorreto. Verifique o relógio do celular e tente novamente.")
 
         return False
@@ -156,8 +188,10 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
 
         if btn_entrar:
             if validar_codigo_totp(secret_cadastrado, codigo_login):
+                registrar_log(cracha_colab, "LOGIN_TOTP_SUCESSO", "Acesso autorizado via código 2FA.")
                 return True
             else:
+                registrar_log(cracha_colab, "FALHA_LOGIN_TOTP", "Código TOTP inválido ou expirado digitado no login recorrente.")
                 st.error("❌ Código inválido ou expirado. Tente novamente.")
 
         return False

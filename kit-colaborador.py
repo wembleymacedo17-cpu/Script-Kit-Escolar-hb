@@ -554,7 +554,7 @@ def analisa_certidao_complementar(arquivo):
 
 
 def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalidez"]):
-    """Busca colaborador diretamente no banco de dados (Supabase)"""
+    """Busca colaborador diretamente no banco de dados (Supabase) trazendo CPF e Data de Nascimento"""
     print("Buscando colaborador no banco...")
     
     with st.form("form_busca"):
@@ -573,11 +573,13 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
     
     supabase_connector = SupabaseConnector()
     try:
-        # 🔍 ADICIONADAS AS COLUNAS DO TOTP NA QUERY
+        # 🛡️ QUERY ATUALIZADA: Incluindo 'cpf' e 'data_nascimento'
         query_banco = f"""
         SELECT 
             cracha,
             nome,
+            cpf,
+            data_nascimento,
             descricao_situacao,
             titulo_reduzido_cargo,
             id_cargo,
@@ -609,15 +611,19 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             st.session_state.colaborador = None  
             return None
             
-        # ==================== SALVA NO SESSION_STATE COM TODAS AS CHAVES ====================
+        # Formatador rápido de segurança para garantir 11 dígitos no CPF
+        cpf_raw = str(colaborador.get("cpf", "")).strip().split(".")[0]
+        cpf_formatado = cpf_raw.zfill(11) if cpf_raw and cpf_raw != "None" else ""
+
+        # ==================== SALVA NO SESSION_STATE COM AS COLUNAS CORRETAS ====================
         st.session_state.colaborador = {
             "id": colaborador["cracha"],
             "cracha": colaborador["cracha"],            
             "Crachá": colaborador["cracha"],
             "Nome": colaborador["nome"],
             "nome": colaborador["nome"],
-            "cpf": colaborador.get("Cpf"),
-            "data_nascimento": colaborador.get("data_nascimento"), # 👈 Garanta que mapeia aqui
+            "cpf": cpf_formatado,
+            "data_nascimento": colaborador.get("data_nascimento"),
             "Título Reduzido (Cargo)": colaborador["titulo_reduzido_cargo"],
             "Descrição (Situação)": colaborador["descricao_situacao"],
             "id_cargo": int(colaborador["id_cargo"]) if colaborador.get("id_cargo") else None,
@@ -625,7 +631,6 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             "totp_ativo": colaborador.get("totp_ativo", False)
         }
 
-        
         return st.session_state.colaborador
         
     finally:

@@ -120,6 +120,16 @@ class Retirada(Base):
     data_entrega = Column(DateTime)
 
 
+class LogAuditoria(Base):
+    __tablename__ = "logs_auditoria"
+    __table_args__ = {'extend_existing': True}
+    
+    id_log = Column(Integer, primary_key=True, autoincrement=True)
+    cracha = Column(BigInteger, nullable=True)
+    acao = Column(String(100), nullable=False)  
+    detalhes = Column(Text, nullable=True)      
+    data_hora = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
 # ===================== FUNÇÕES E MÉTODOS =====================
 
 def get_db():
@@ -197,6 +207,59 @@ def atualizar_colaboradores_merge(engine_db, df_oracle: pd.DataFrame):
     except Exception as e:
         print(f"❌ Erro ao realizar a sincronização dos colaboradores: {e}")
         raise e
+
+def obter_ip_cliente():
+    """Captura o endereço de IP real do usuário conectado ao Streamlit."""
+    try:
+        from streamlit.web.server.websocket_headers import _get_websocket_headers
+        headers = _get_websocket_headers()
+        if headers:
+            # Captura IP atrás de proxies (como Cloudflare, Nginx, Supabase, etc.)
+            ip = headers.get("X-Forwarded-For", "").split(",")[0].strip()
+            if not ip:
+                ip = headers.get("Remote-Addr", "")
+            return ip if ip else "Desconhecido"
+    except Exception:
+        pass
+    return "Local/Desconhecido"
+
+
+
+def registrar_log(cracha: int, acao: str, detalhes: str = None):
+    """Grava um registro de auditoria de forma isolada e segura."""
+    db = SessionLocal()
+    try:
+        novo_log = LogAuditoria(
+            cracha=cracha,
+            acao=acao,
+            detalhes=detalhes
+        )
+        db.add(novo_log)
+        db.commit()
+    except Exception as e:
+        print(f"❌ Erro ao gravar log de auditoria: {e}")
+    finally:
+        db.close()
+
+def registrar_log(cracha: int, acao: str, detalhes: str = None, ip_origem: str = None):
+    """Grava um registro de auditoria completo com IP do usuário."""
+    db = SessionLocal()
+    try:
+        ip_final = ip_origem or obter_ip_cliente()
+        novo_log = LogAuditoria(
+            cracha=cracha,
+            acao=acao,
+            detalhes=detalhes,
+        )
+        if not hasattr(LogAuditoria, 'ip_origem'):
+            novo_log.detalhes = f"[IP: {ip_final}] {detalhes or ''}"
+
+        db.add(novo_log)
+        db.commit()
+    except Exception as e:
+        print(f"❌ Erro ao gravar log de auditoria: {e}")
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
