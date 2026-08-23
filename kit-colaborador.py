@@ -61,33 +61,34 @@ generation_config_certidao = types.GenerateContentConfig(
     }
 )
 # ---------------------------------------------------------------
-# CONFIGURAÇÃO DE IA: DECLARAÇÃO ESCOLAR / MATRÍCULA
+# CONFIGURAÇÃO DE IA: DECLARAÇÃO ESCOLAR / MATRÍCULA (EQUILIBRADA)
 # ---------------------------------------------------------------
 generation_config_declaracao_escolar = types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",
     system_instruction=(
-        "Você é um auditor especializado em documentos escolares e acadêmicos brasileiros.\n"
-        "Sua função é analisar o documento e classificar sua autenticidade e validade com precisão.\n\n"
+        "Você é um auditor de documentos acadêmicos e escolares brasileiros.\n"
+        "Sua função é analisar a declaração escolar e categorizar o nível de validação do documento.\n\n"
 
         "1. Identificação da Escola (tem_identificacao_escola):\n"
-        "   - Retorne true se houver nome da escola, logotipo, brasão de prefeitura/estado, CNPJ ou dados formais da instituição.\n"
-        "   - Retorne false se for um texto genérico em folha em branco sem nenhuma identificação da instituição.\n\n"
+        "   - Retorne true se o documento contiver cabeçalho, nome da escola, prefeitura/estado ou dados oficiais da instituição.\n"
+        "   - Retorne false se for um texto totalmente genérico sem identificação da escola.\n\n"
 
-        "2. Tipo de Autenticidade (tipo_autenticidade):\n"
-        "   - 'Fisica': O documento possui assinatura manuscrita (à caneta), rubrica física ou carimbo de tinta/físico visível.\n"
-        "   - 'Digital': O documento foi emitido eletronicamente e possui código de validação, chave de autenticidade, QR Code, link de validação ou assinatura digital (Gov.br / ICP).\n"
-        "   - 'Nenhuma': Não possui assinatura à caneta, não possui carimbo físico e não possui nenhum código/chave/QR Code de validação eletrônica.\n\n"
+        "2. Análise de Autenticidade (tipo_autenticidade):\n"
+        "   - 'Fisica': Possui assinatura manual (à caneta), rubrica física ou carimbo de tinta visível no papel.\n"
+        "   - 'Digital': Possui código de verificação eletrônica, chave de validação, QR Code ou certificado digital oficial.\n"
+        "   - 'Sistema_Sem_Validador': O documento possui dados oficiais de escola pública/sistema educacional (ex: Prefeitura, Secretaria de Educação, RA do aluno, dados da direção), porém é uma impressão direta do sistema sem carimbo ou código de validação digital.\n"
+        "   - 'Nenhuma': Documento sem dados institucionais, sem assinatura, sem validação e com suspeita de digitação manual/sintética sem vínculo escolar.\n\n"
 
         "3. Regra de Validade (eh_declaracao_matricula):\n"
-        "   - Retorne true se o documento atestar matrícula/frequência E 'tem_identificacao_escola' for true E 'tipo_autenticidade' for 'Fisica' ou 'Digital'.\n"
-        "   - Retorne false se não comprovar matrícula, se faltar identificação da escola, ou se 'tipo_autenticidade' for 'Nenhuma'.\n\n"
+        "   - Retorne true se o documento comprovar matrícula E 'tem_identificacao_escola' for true E 'tipo_autenticidade' for 'Fisica', 'Digital' ou 'Sistema_Sem_Validador'.\n"
+        "   - Retorne false se não comprovar matrícula ou 'tipo_autenticidade' for 'Nenhuma'.\n\n"
 
         "4. Extração de Dados:\n"
-        "   - 'nome_aluno': Nome completo do aluno conforme consta no documento.\n"
-        "   - 'codigo_validacao': Extraia o código, chave ou hash de verificação digital (se houver, caso contrário null).\n"
-        "   - 'motivo_rejeicao': Descreva o motivo caso seja reprovado (ex: 'Documento sem assinatura, carimbo ou código de validação').\n"
-        "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
+        "   - 'nome_aluno': Nome completo do aluno.\n"
+        "   - 'codigo_validacao': Chave ou código de validação (se houver, caso contrário null).\n"
+        "   - 'motivo_rejeicao': Motivo caso o documento seja inválido.\n"
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA."
     ),
     response_schema={
         "type": "OBJECT",
@@ -97,7 +98,7 @@ generation_config_declaracao_escolar = types.GenerateContentConfig(
             "tem_identificacao_escola": {"type": "BOOLEAN"},
             "tipo_autenticidade": {
                 "type": "STRING", 
-                "enum": ["Fisica", "Digital", "Nenhuma"]
+                "enum": ["Fisica", "Digital", "Sistema_Sem_Validador", "Nenhuma"]
             },
             "codigo_validacao": {"type": "STRING", "nullable": True},
             "nome_aluno": {"type": "STRING"},
@@ -354,40 +355,45 @@ def nomes_correspondem_com_abreviacao(nome_a: str, nome_b: str) -> bool:
             return False
     return True
 
-
 def valida_declaracao_escolar(dados_declaracao: dict, nome_certidao: str):
     """
-    Retorna: (sucesso: bool, mensagem: str, status_revisao_rh: str)
+    Retorna: (sucesso: bool, mensagem_usuario: str, status_revisao_rh: str, motivo_detalhado_rh: str)
     """
     if not dados_declaracao:
-        return False, "Não foi possível analisar a declaração escolar.", "Erro"
+        return False, "Não foi possível analisar a declaração escolar.", "Erro", "IA não conseguiu extrair dados do arquivo."
         
     if dados_declaracao.get("legivel") is False:
-        return False, "A declaração escolar está ilegível.", "Erro"
+        return False, "A declaração escolar está ilegível.", "Erro", "Documento ilegível ou com baixa resolução."
 
     if not dados_declaracao.get("tem_identificacao_escola"):
-        return False, "Documento sem identificação ou cabeçalho oficial da escola.", "Erro"
+        return False, "Documento sem identificação ou cabeçalho oficial da escola.", "Erro", "Falta timbre, CNPJ ou dados institucionais."
+
+    # Se a IA sinalizar suspeita de geração sintética / fraude
+    if dados_declaracao.get("eh_sintetico_suspeito") is True:
+        motivo_alerta = dados_declaracao.get("motivo_rejeicao") or "⚠️ ATENÇÃO RH: Documento com fortes indícios de geração por IA / edição sintética."
+        msg_user = "Recebemos sua declaração escolar. Ela passará por uma verificação detalhada junto à equipe do RH."
+        return True, msg_user, "Sim (Suspeita de Fraude IA)", motivo_alerta
 
     tipo_auth = dados_declaracao.get("tipo_autenticidade")
 
-    # Bloqueia se não tiver nenhum elemento formal de autenticidade
     if tipo_auth == "Nenhuma" or not dados_declaracao.get("eh_declaracao_matricula"):
-        motivo = dados_declaracao.get("motivo_rejeicao") or "O documento não possui assinatura, carimbo nem código de validação."
-        return False, f"Documento Rejeitado: {motivo}", "Erro"
+        motivo = dados_declaracao.get("motivo_rejeicao") or "Sem assinatura, carimbo físico ou código de validação."
+        return False, f"Documento Rejeitado: {motivo}", "Erro", motivo
 
     # Validação do nome do aluno
     nome_declaracao = (dados_declaracao.get("nome_aluno") or "").strip()
     if not nomes_correspondem_com_abreviacao(nome_declaracao, nome_certidao):
-        return False, f"O nome da declaração ({nome_declaracao}) não confere com o documento de identidade ({nome_certidao}).", "Erro"
+        motivo_nome = f"Divergência de Nome: Declaração consta '{nome_declaracao}' e Documento consta '{nome_certidao}'."
+        return False, f"O nome na declaração ({nome_declaracao}) não confere com a identidade ({nome_certidao}).", "Erro", motivo_nome
 
-    # Lógica de Quarentena / Separação para o RH
-    if tipo_auth == "Digital":
-        codigo = dados_declaracao.get("codigo_validacao") or "Código não extraído"
-        msg = f"Declaração eletrônica aceita ({codigo}). Enviada para validação do RH."
-        return True, msg, "Sim (Validação Eletrônica)"
-    
-    # Documento físico validado com carimbo/assinatura manuscrita
-    return True, f"Declaração física válida para {nome_declaracao}.", "Não"
+    # CASO: Declaração Digital ou Emitida via Sistema Sem Validador -> Envia pro RH com o motivo gravado
+    if tipo_auth in ["Digital", "Sistema_Sem_Validador"]:
+        codigo = dados_declaracao.get("codigo_validacao") or "N/A"
+        motivo_rh = f"Declaração emitida via sistema ({tipo_auth}) sem carimbo físico/assinatura manual. Código extraído: {codigo}."
+        msg_user = "Sua declaração foi recebida! Como foi emitida via sistema escolar, nossa equipe do RH fará a conferência dos dados."
+        return True, msg_user, "Sim (Validação Eletrônica)", motivo_rh
+
+    return True, f"Declaração física válida para {nome_declaracao}.", "Não", None
 
 # 🔹 ALTERAÇÃO: Mensagem genérica para quando for RG e o usuário não enviar a filiação
 def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
@@ -771,18 +777,18 @@ def adicionar_dependentes():
     if not verificar_limite_clique("valida_dependente", 5):
         return None
     
-    # 🎯 CORREÇÃO CRÍTICA DO BARRAMENTO: Valida e paralisa a execução IMEDIATAMENTE antes de testar erros do form ou banco
+    # Valida e paralisa a execução IMEDIATAMENTE se faltar arquivo ou for inválido
     valido_cert = validar_arquivo(certidao, "Certidão/RG da Criança")
     valido_decl = validar_arquivo(declaracao_escolar, "Declaração Escolar")
     if not (valido_cert and valido_decl):
-        st.stop()  # Impede a continuidade do processamento do formulário no Streamlit
+        st.stop()
 
     erros = []
     if not nome_filho.strip(): erros.append("❌ Nome da criança é obrigatório.")
     elif len(nome_filho.strip()) < 3: erros.append("❌ Nome muito curto.")
     elif re.search(r'[^a-zA-ZÀ-ÿ\s]', nome_filho): erros.append("❌ Nome não pode conter números ou caracteres especiais.")
     if not genero: erros.append("❌ Gênero é obrigatório.")
-    if not st.session_state.escolaridade: erros.append("❌ Escolaridade é obrigatória.") if 'erros_com' in locals() else erros.append("❌ Escolaridade é obrigatória.")
+    if not st.session_state.escolaridade: erros.append("❌ Escolaridade é obrigatória.")
     if not st.session_state.ano_escolar: erros.append("❌ Ano Escolar é obrigatório.")
     if not certidao: erros.append("❌ Certidão de Nascimento ou RG é obrigatório.")
     if not declaracao_escolar: erros.append("❌ Declaração escolar de matrícula é obrigatória.")
@@ -799,7 +805,7 @@ def adicionar_dependentes():
             return None
 
         # =========================================================
-        # UPLOAD DE MULTIPLOS DOCUMENTOS PARA A QUARENTENA DO RH
+        # UPLOAD DE MULTIPLOS DOCUMENTOS PARA A QUARENTENA DO RH (BYPASS)
         # =========================================================
         if forcar_envio_rh:
             with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
@@ -837,15 +843,15 @@ def adicionar_dependentes():
                 "Ano_escolar": st.session_state.ano_escolar,
                 "revisao_rh": "Revisão Manual (Bypass Usuário)",
                 "Fluxo_Documento": "A1 - Identidade (Cert/RG) + Declaração Escolar (Filho Biológico)",
-                "motivo_reprova_ia": f"Causa do erro: {erro_salvo}",
-                "url_documento": url_doc,
                 "aceite_ia": aceite_ia,
                 "aceite_lgpd": aceite_lgpd,
-                "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "motivo_reprova_ia": f"Forçado pelo usuário. Erro original: {erro_salvo}", 
+                "url_documento": url_doc
             }
 
         # =========================================================
-        # FLUXO NORMAL (Primeira tentativa com a IA)
+        # FLUXO NORMAL (Análise e Validação com a IA)
         # =========================================================
         with st.spinner("🔍 Analisando documento de identidade, aguarde..."):
             dados_certidao, erro_api = analisa_certidao(certidao)
@@ -870,7 +876,9 @@ def adicionar_dependentes():
             st.session_state.erro_ia_a1 = erro_declaracao
             st.rerun()
 
-        declaracao_ok, msg_declaracao, status_rh_decl = valida_declaracao_escolar(
+        
+       
+        declaracao_ok, msg_declaracao, status_rh_decl, motivo_rh_detalhado = valida_declaracao_escolar(
             dados_declaracao, dados_certidao.get("nome_crianca") or nome_filho
         )
 
@@ -886,10 +894,16 @@ def adicionar_dependentes():
             st.session_state.erro_ia_a1 = mensagem_erro_atual
             st.rerun() # Recarrega a tela exibindo o checkbox de bypass
 
-        # Sucesso absoluto da IA
+        # Sucesso da validação da IA
         st.session_state.erro_ia_a1 = None
-        st.success("✅ Documento validado com sucesso pela IA!")
-        time.sleep(1.5)
+        
+        # 🎯 EXIBIÇÃO DO AVISO DE QUARENTENA / APROVAÇÃO DIRETA
+        if status_rh_decl and str(status_rh_decl).startswith("Sim"):
+            st.warning(f"⚠️ **Aviso de Cadastro:** {msg_declaracao}")
+            time.sleep(3.5)  # Dá tempo do colaborador ler a mensagem antes do rerun
+        else:
+            st.success("✅ Documento validado com sucesso pela IA!")
+            time.sleep(1.5)
 
         nome_final = padroniza_texto(dados_certidao.get("nome_crianca") or nome_filho)
         return {
@@ -902,7 +916,7 @@ def adicionar_dependentes():
             "Ano_escolar": st.session_state.ano_escolar,
             "revisao_rh": status_rh_decl,  
             "Fluxo_Documento": "A1 - Identidade (Cert/RG) + Declaração Escolar (Filho Biológico)",
-            "motivo_reprova_ia": None,
+            "motivo_reprova_ia": motivo_rh_detalhado,  # 🎯 Grava o motivo exato do RH no banco
             "url_documento": None,
             "aceite_ia": aceite_ia,
             "aceite_lgpd": aceite_lgpd,
@@ -2338,14 +2352,18 @@ def interface():
                                                     st.session_state.erro_ia_a2 = err_decl_a2
                                                     st.rerun()
                                                 else:
-                                                    decl_ok_a2, msg_decl_a2, status_rh_a2 = valida_declaracao_escolar(
+                                                    decl_ok_a2, msg_decl_a2, status_rh_a2, motivo_rh_a2 = valida_declaracao_escolar(
                                                         dados_decl_a2, dados_a2.get("nome_crianca") or nome_filho_a2
                                                     )
-                                                    
+
                                                     if not decl_ok_a2:
                                                         st.session_state.erro_ia_a2 = msg_decl_a2
                                                         st.rerun()
                                                     else:
+                                                        if status_rh_a2 and str(status_rh_a2).startswith("Sim"):
+                                                            st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_a2}")
+                                                            time.sleep(3.5)
+                                                        
                                                         nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
                                                         pais_responsaveis = [padroniza_texto(p) for p in dados_a2.get("nomes_pais_responsaveis", [])]
 
@@ -2375,7 +2393,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_a2,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -2665,7 +2683,7 @@ def interface():
                                                 st.session_state.erro_ia_b1 = err_decl_b1
                                                 st.rerun()
                                             else:
-                                                decl_ok_b1, msg_decl_b1, status_rh_b1 = valida_declaracao_escolar(
+                                                decl_ok_b1, msg_decl_b1, status_rh_b1, motivo_rh_b1 = valida_declaracao_escolar(
                                                     dados_decl_b1, dados_cert.get("nome_crianca") or nome_filho_b
                                                 )
                                                 
@@ -2673,6 +2691,10 @@ def interface():
                                                     st.session_state.erro_ia_b1 = msg_decl_b1
                                                     st.rerun()
                                                 else:
+                                                    if status_rh_b1 and str(status_rh_b1).startswith("Sim"):
+                                                        st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_b1}")
+                                                        time.sleep(3.5)
+
                                                     dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
                                                     
                                                     if err_uniao:
@@ -2717,7 +2739,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_b1,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -2847,7 +2869,7 @@ def interface():
                                                 st.session_state.erro_ia_b2 = err_decl_b2
                                                 st.rerun()
                                             else:
-                                                decl_ok_b2, msg_decl_b2, status_rh_b2 = valida_declaracao_escolar(
+                                                decl_ok_b2, msg_decl_b2, status_rh_b2, motivo_rh_b2 = valida_declaracao_escolar(
                                                     dados_decl_b2, dados_cert.get("nome_crianca") or nome_filho_b2
                                                 )
                                                 
@@ -2855,6 +2877,9 @@ def interface():
                                                     st.session_state.erro_ia_b2 = msg_decl_b2
                                                     st.rerun()
                                                 else:
+                                                    if status_rh_b2 and str(status_rh_b2).startswith("Sim"):
+                                                        st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_b2}")
+                                                        time.sleep(3.5)
                                                     dados_casam, err_casam = analisa_certidao_complementar(casamento_b2)
                                                     
                                                     if err_casam:
@@ -2900,7 +2925,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_b2,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -3068,7 +3093,7 @@ def interface():
                                                 st.session_state.erro_ia_c1 = err_decl_c1
                                                 st.rerun()
                                             else:
-                                                decl_ok_c1, msg_decl_c1, status_rh_c1 = valida_declaracao_escolar(
+                                                decl_ok_c1, msg_decl_c1, status_rh_c1, motivo_rh_c1 = valida_declaracao_escolar(
                                                     dados_decl_c1, dados_cert_c1.get("nome_crianca") or nome_filho_c1
                                                 )
                                                 
@@ -3076,6 +3101,9 @@ def interface():
                                                     st.session_state.erro_ia_c1 = msg_decl_c1
                                                     st.rerun()
                                                 else:
+                                                    if status_rh_c1 and str(status_rh_c1).startswith("Sim"):
+                                                        st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_c1}")
+                                                        time.sleep(3.5)
                                                     dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
                                                     
                                                     if err_guarda:
@@ -3121,7 +3149,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_c1,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
@@ -3251,7 +3279,7 @@ def interface():
                                                 st.session_state.erro_ia_c2 = err_decl_c2
                                                 st.rerun()
                                             else:
-                                                decl_ok_c2, msg_decl_c2, status_rh_c2 = valida_declaracao_escolar(
+                                                decl_ok_c2, msg_decl_c2, status_rh_c2, motivo_rh_c2 = valida_declaracao_escolar(
                                                     dados_decl_c2, dados_cert_c2.get("nome_crianca") or nome_filho_c2
                                                 )
                                                 
@@ -3259,6 +3287,9 @@ def interface():
                                                     st.session_state.erro_ia_c2 = msg_decl_c2
                                                     st.rerun()
                                                 else:
+                                                    if status_rh_c2 and str(status_rh_c2).startswith("Sim"):
+                                                        st.warning(f"⚠️ **Aviso de Cadastro:** {msg_decl_c2}")
+                                                        time.sleep(3.5)
                                                     dados_tutela, err_tutela = analisa_tutela_judicial(termo_tutela_c2)
                                                     
                                                     if err_tutela:
@@ -3304,7 +3335,7 @@ def interface():
                                                                         "aceite_ia": aceite_ia,
                                                                         "aceite_lgpd": aceite_lgpd,
                                                                         "data_aceite": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                                                        "motivo_reprova_ia": None,
+                                                                        "motivo_reprova_ia": motivo_rh_c2,
                                                                         "url_documento": None
                                                                     })
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
