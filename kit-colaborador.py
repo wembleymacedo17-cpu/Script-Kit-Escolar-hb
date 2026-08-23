@@ -782,7 +782,7 @@ def adicionar_dependentes():
     elif len(nome_filho.strip()) < 3: erros.append("❌ Nome muito curto.")
     elif re.search(r'[^a-zA-ZÀ-ÿ\s]', nome_filho): erros.append("❌ Nome não pode conter números ou caracteres especiais.")
     if not genero: erros.append("❌ Gênero é obrigatório.")
-    if not st.session_state.escolaridade: erros.append("❌ Escolaridade é obrigatória.")
+    if not st.session_state.escolaridade: erros.append("❌ Escolaridade é obrigatória.") if 'erros_com' in locals() else erros.append("❌ Escolaridade é obrigatória.")
     if not st.session_state.ano_escolar: erros.append("❌ Ano Escolar é obrigatório.")
     if not certidao: erros.append("❌ Certidão de Nascimento ou RG é obrigatório.")
     if not declaracao_escolar: erros.append("❌ Declaração escolar de matrícula é obrigatória.")
@@ -798,14 +798,25 @@ def adicionar_dependentes():
             st.error("❌ Esta criança já está no seu carrinho ou já possui um kit cadastrado.")
             return None
 
-   
+        # =========================================================
+        # UPLOAD DE MULTIPLOS DOCUMENTOS PARA A QUARENTENA DO RH
+        # =========================================================
         if forcar_envio_rh:
             with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
                 cracha_colab = st.session_state.colaborador['Crachá']
                 
-                # Sobe o documento relevante (Declaração Escolar ou Certidão)
                 try:
-                    url_doc = upload_documento_supabase(declaracao_escolar, "declaracao_escolar", cracha_colab)
+                    urls = []
+                    if certidao:
+                        u_identidade = upload_documento_supabase(certidao, "identidade", cracha_colab)
+                        if u_identidade:
+                            urls.append(u_identidade)
+                    if declaracao_escolar:
+                        u_declaracao = upload_documento_supabase(declaracao_escolar, "declaracao", cracha_colab)
+                        if u_declaracao:
+                            urls.append(u_declaracao)
+                    
+                    url_doc = ",".join(urls) if urls else None
                 except Exception as e:
                     url_doc = None
             
@@ -902,11 +913,6 @@ def adicionar_dependentes():
         db.close()
 
 
-def ficha_colaborador():
-    print("Exibindo ficha do colaborador...")
-    # Código para exibir a ficha do colaborador
-    # Exemplo: renderização de interface, exibição de dados, etc.
-    pass
 
 #---------------------------------------------------FUNCOES DE VALIDACAO input
 def editar_kits_existentes(id_colaborador):
@@ -2264,8 +2270,16 @@ def interface():
                             else:
                                 if forcar_envio_rh_a2:
                                     with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                        cracha_colab = st.session_state.colaborador['Crachá']
                                         try:
-                                            url_doc_a2 = upload_documento_supabase(declaracao_escolar_a2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                            urls = []
+                                            if certidao_averbada:
+                                                u1 = upload_documento_supabase(certidao_averbada, "certidao_averbada", cracha_colab)
+                                                if u1: urls.append(u1)
+                                            if declaracao_escolar_a2:
+                                                u2 = upload_documento_supabase(declaracao_escolar_a2, "declaracao", cracha_colab)
+                                                if u2: urls.append(u2)
+                                            url_doc_a2 = ",".join(urls) if urls else None
                                         except Exception:
                                             url_doc_a2 = None
 
@@ -2575,8 +2589,19 @@ def interface():
                         else:
                             if forcar_envio_rh_b1:
                                 with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                    cracha_colab = st.session_state.colaborador['Crachá']
                                     try:
-                                        url_doc_b1 = upload_documento_supabase(declaracao_escolar_b1, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                        urls = []
+                                        if certidao_b:
+                                            u1 = upload_documento_supabase(certidao_b, "identidade", cracha_colab)
+                                            if u1: urls.append(u1)
+                                        if uniao_b:
+                                            u2 = upload_documento_supabase(uniao_b, "uniao_estavel", cracha_colab)
+                                            if u2: urls.append(u2)
+                                        if declaracao_escolar_b1:
+                                            u3 = upload_documento_supabase(declaracao_escolar_b1, "declaracao", cracha_colab)
+                                            if u3: urls.append(u3)
+                                        url_doc_b1 = ",".join(urls) if urls else None
                                     except Exception:
                                         url_doc_b1 = None
 
@@ -2747,8 +2772,19 @@ def interface():
                         else:
                             if forcar_envio_rh_b2:
                                 with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                    cracha_colab = st.session_state.colaborador['Crachá']
                                     try:
-                                        url_doc_b2 = upload_documento_supabase(declaracao_escolar_b2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                        urls = []
+                                        if certidao_b2:
+                                            u1 = upload_documento_supabase(certidao_b2, "identidade", cracha_colab)
+                                            if u1: urls.append(u1)
+                                        if casamento_b2:
+                                            u2 = upload_documento_supabase(casamento_b2, "casamento", cracha_colab)
+                                            if u2: urls.append(u2)
+                                        if declaracao_escolar_b2:
+                                            u3 = upload_documento_supabase(declaracao_escolar_b2, "declaracao", cracha_colab)
+                                            if u3: urls.append(u3)
+                                        url_doc_b2 = ",".join(urls) if urls else None
                                     except Exception:
                                         url_doc_b2 = None
 
@@ -2957,8 +2993,19 @@ def interface():
                         else:
                             if forcar_envio_rh_c1:
                                 with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                    cracha_colab = st.session_state.colaborador['Crachá']
                                     try:
-                                        url_doc_c1 = upload_documento_supabase(declaracao_escolar_c1, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                        urls = []
+                                        if certidao_c1:
+                                            u1 = upload_documento_supabase(certidao_c1, "identidade", cracha_colab)
+                                            if u1: urls.append(u1)
+                                        if termo_guarda_c1:
+                                            u2 = upload_documento_supabase(termo_guarda_c1, "guarda_judicial", cracha_colab)
+                                            if u2: urls.append(u2)
+                                        if declaracao_escolar_c1:
+                                            u3 = upload_documento_supabase(declaracao_escolar_c1, "declaracao", cracha_colab)
+                                            if u3: urls.append(u3)
+                                        url_doc_c1 = ",".join(urls) if urls else None
                                     except Exception:
                                         url_doc_c1 = None
 
@@ -3129,8 +3176,19 @@ def interface():
                         else:
                             if forcar_envio_rh_c2:
                                 with st.spinner("📤 Enviando documentos para a quarentena do RH..."):
+                                    cracha_colab = st.session_state.colaborador['Crachá']
                                     try:
-                                        url_doc_c2 = upload_documento_supabase(declaracao_escolar_c2, "declaracao_escolar", st.session_state.colaborador['Crachá'])
+                                        urls = []
+                                        if certidao_c2:
+                                            u1 = upload_documento_supabase(certidao_c2, "identidade", cracha_colab)
+                                            if u1: urls.append(u1)
+                                        if termo_tutela_c2:
+                                            u2 = upload_documento_supabase(termo_tutela_c2, "tutela_judicial", cracha_colab)
+                                            if u2: urls.append(u2)
+                                        if declaracao_escolar_c2:
+                                            u3 = upload_documento_supabase(declaracao_escolar_c2, "declaracao", cracha_colab)
+                                            if u3: urls.append(u3)
+                                        url_doc_c2 = ",".join(urls) if urls else None
                                     except Exception:
                                         url_doc_c2 = None
 
