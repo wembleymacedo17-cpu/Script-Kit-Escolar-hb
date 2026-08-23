@@ -214,32 +214,17 @@ def obter_ip_cliente():
         from streamlit.web.server.websocket_headers import _get_websocket_headers
         headers = _get_websocket_headers()
         if headers:
-            # Captura IP atrás de proxies (como Cloudflare, Nginx, Supabase, etc.)
+            # Tenta pegar o IP repassado por proxies em produção
             ip = headers.get("X-Forwarded-For", "").split(",")[0].strip()
             if not ip:
                 ip = headers.get("Remote-Addr", "")
-            return ip if ip else "Desconhecido"
+            if ip:
+                return ip
     except Exception:
         pass
-    return "Local/Desconhecido"
+    
+    return "127.0.0.1 (Localhost)"
 
-
-
-def registrar_log(cracha: int, acao: str, detalhes: str = None):
-    """Grava um registro de auditoria de forma isolada e segura."""
-    db = SessionLocal()
-    try:
-        novo_log = LogAuditoria(
-            cracha=cracha,
-            acao=acao,
-            detalhes=detalhes
-        )
-        db.add(novo_log)
-        db.commit()
-    except Exception as e:
-        print(f"❌ Erro ao gravar log de auditoria: {e}")
-    finally:
-        db.close()
 
 def registrar_log(cracha: int, acao: str, detalhes: str = None, ip_origem: str = None):
     """Grava um registro de auditoria completo com IP do usuário."""
