@@ -42,7 +42,7 @@ generation_config_certidao = types.GenerateContentConfig(
         "Regra 2: Verifique se o documento está totalmente legível. Se estiver borrado, muito escuro, cortado ou ilegível a ponto de não conseguir ler os dados com segurança, classifique 'legivel' como false. Caso contrário, true.\n"
         "Regra 3: Extraia o nome completo do pai e o nome completo da mãe, exatamente como constam no documento (no RG, procure por filiação). Se um dos nomes não existir (ex: pai ausente) ou a imagem não contiver esse lado do documento, retorne null.\n"
         "Regra 4: Extraia o nome completo da criança/titular registrado no documento.\n"
-        "Regra 5: Extraia a data de nascimento da criança/titular no formato DD/MM/AAAA.\n"
+        "Regra 5: Extraia a data de nascimento da criança/titular no formato DD/MM/AAAA. ATENÇÃO À LEITURA DE DATAS (OCR): Inspecione minuciosamente a imagem antes de extrair a data. Cuidado com ranhuras, fundo de segurança do papel ou marcas de carimbo sobre os números que possam fazer a visão computacional confundir dígitos parecidos (ex: '1' com '7', '3' com '8', '0' com '6', ou '5' com '6').\n"
         "Regra 6: Identifique o sexo da criança/titular conforme consta no documento (se não houver campo explícito, infira pelo nome). Retorne EXATAMENTE 'Masculino' ou 'Feminino', sem abreviações.\n"
         "OBS: NAO DAR RESPOSTA EXPLICATIVA"
     ),
@@ -66,34 +66,35 @@ generation_config_certidao = types.GenerateContentConfig(
 generation_config_declaracao_escolar = types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",
-    system_instruction=(
-        "Você é um auditor de documentos acadêmicos e escolares brasileiros.\n"
-        "Sua função é analisar a declaração escolar e categorizar o nível de validação do documento.\n\n"
+    system_instruction= (
+    "Você é um auditor de documentos acadêmicos e escolares brasileiros.\n"
+    "Sua função é analisar a declaração escolar e categorizar o nível de validação do documento.\n\n"
 
-        "1. Identificação da Escola (tem_identificacao_escola):\n"
-        "   - Retorne true se o documento contiver cabeçalho, nome da escola, prefeitura/estado ou dados oficiais da instituição.\n"
-        "   - Retorne false se for um texto totalmente genérico sem identificação da escola.\n\n"
+    "1. Identificação da Escola (tem_identificacao_escola):\n"
+    "   - Retorne true se o documento contiver cabeçalho, nome da escola, prefeitura/estado ou dados oficiais da instituição.\n"
+    "   - Retorne false se for um texto totalmente genérico sem identificação da escola.\n\n"
 
-        "2. Análise de Autenticidade (tipo_autenticidade):\n"
-        "   - 'Fisica': Possui assinatura manual (à caneta), rubrica física ou carimbo de tinta visível no papel.\n"
-        "   - 'Digital': Possui código de verificação eletrônica, chave de validação, QR Code ou certificado digital oficial.\n"
-        "   - 'Sistema_Sem_Validador': O documento possui dados oficiais de escola pública/sistema educacional (ex: Prefeitura, Secretaria de Educação, RA do aluno, dados da direção), porém é uma impressão direta do sistema sem carimbo ou código de validação digital.\n"
-        "   - 'Nenhuma': Documento sem dados institucionais, sem assinatura, sem validação e com suspeita de digitação manual/sintética sem vínculo escolar.\n\n"
+    "2. Análise de Autenticidade (tipo_autenticidade):\n"
+    "   - 'Fisica': Possui assinatura manual (à caneta), rubrica física ou carimbo de tinta visível no papel.\n"
+    "   - 'Digital': Possui código de verificação eletrônica, chave de validação, QR Code ou certificado digital oficial.\n"
+    "   - 'Sistema_Sem_Validador': O documento possui dados oficiais de escola pública/sistema educacional (ex: Prefeitura, Secretaria de Educação, RA do aluno, dados da direção), porém é uma impressão direta do sistema sem carimbo ou código de validação digital.\n"
+    "   - 'Nenhuma': Documento sem dados institucionais, sem assinatura, sem validação e com suspeita de digitação manual/sintética sem vínculo escolar.\n\n"
 
-        "3. Regra de Validade (eh_declaracao_matricula):\n"
-        "   - Retorne true se o documento comprovar matrícula E 'tem_identificacao_escola' for true E 'tipo_autenticidade' for 'Fisica', 'Digital' ou 'Sistema_Sem_Validador'.\n"
-        "   - Retorne false se não comprovar matrícula ou 'tipo_autenticidade' for 'Nenhuma'.\n\n"
+    "3. Regra de Validade (eh_declaracao_matricula):\n"
+    "   - Retorne true se o documento comprovar matrícula E 'tem_identificacao_escola' for true E 'tipo_autenticidade' for 'Fisica', 'Digital' ou 'Sistema_Sem_Validador'.\n"
+    "   - Retorne false se não comprovar matrícula ou 'tipo_autenticidade' for 'Nenhuma'.\n\n"
 
-        "4. Extração de Dados:\n"
-        "   - 'nome_aluno': Nome completo do aluno (se não houver aluno ou não for documento escolar, informe 'Não identificado').\n"
-        "   - 'codigo_validacao': Chave ou código de validação (se houver, caso contrário null).\n\n"
+    "4. Extração de Dados e Tolerância OCR/Datas:\n"
+    "   - 'nome_aluno': Nome completo do aluno (se não houver aluno ou não for documento escolar, informe 'Não identificado').\n"
+    "   - 'codigo_validacao': Chave ou código de validação (se houver, caso contrário null).\n"
+    "   - ATENÇÃO À LEITURA DE DATAS E NÚMEROS: Cuidado com ranhuras, sombras ou marcas de carimbo sobre datas e documentos. Digitos parecidos podem ser confundidos pela visão computacional (ex: '1' com '7', '3' com '8', '0' com '6', ou '5' com '6'). Faça uma inspeção minuciosa na imagem antes de determinar qualquer inconsistência de data ou caractere.\n\n"
 
-        "5. Descrição de Conteúdo Incompatível e Motivo de Rejeição:\n"
-        "   - 'descricao_conteudo_invalido': Caso o arquivo enviado NÃO SEJA um documento escolar/acadêmico (ex: foto de animal/galinha, lista de compras, conta de luz, paisagem, etc.), descreva sucintamente o que é a imagem. Se for um documento escolar, retorne null.\n"
-        "   - 'motivo_rejeicao': Caso o documento seja inválido ou incompatível, forneça uma explicação clara e humanizada. Se houver 'descricao_conteudo_invalido', inclua essa descrição diretamente no motivo de rejeição (ex: 'O arquivo enviado trata-se de uma foto de lista de compras e não de uma declaração escolar').\n\n"
+    "5. Descrição de Conteúdo Incompatível e Motivo de Rejeição:\n"
+    "   - 'descricao_conteudo_invalido': Caso o arquivo enviado NÃO SEJA um documento escolar/acadêmico (ex: foto de animal/galinha, lista de compras, conta de luz, paisagem, etc.), descreva sucintamente o que é a imagem. Se for um documento escolar, retorne null.\n"
+    "   - 'motivo_rejeicao': Caso o documento seja inválido ou incompatível, forneça uma explicação clara e humanizada. Se houver 'descricao_conteudo_invalido', inclua essa descrição diretamente no motivo de rejeição (ex: 'O arquivo enviado trata-se de uma foto de lista de compras e não de uma declaração escolar').\n\n"
 
-        "OBS: NÃO DAR RESPOSTA EXPLICATIVA FORA DO JSON."
-    ),
+    "OBS: NÃO DAR RESPOSTA EXPLICATIVA FORA DO JSON."
+),
     response_schema={
         "type": "OBJECT",
         "properties": {
@@ -121,7 +122,7 @@ generation_config_declaracao_escolar = types.GenerateContentConfig(
 #----------------------------------------------- busca documento  "casamento" ou "divorcio"
 
 # ---------------------------------------------------------------
-# CONFIGURAÇÃO DE IA: A2 (CERTIDÃO COM AVERBAÇÃO DE ADOÇÃO)
+# CONFIGURAÇÃO DE IA: A2 (CERTIDÃO DE NASCIMENTO COM AVERBAÇÃO DE ADOÇÃO)
 # ---------------------------------------------------------------
 generation_config_adocao_averbacao = types.GenerateContentConfig(
     temperature=0,
@@ -132,7 +133,7 @@ generation_config_adocao_averbacao = types.GenerateContentConfig(
         "Regra 2: Verifique se o documento está totalmente legível. Classifique 'legivel' como true ou false.\n"
         "Regra 3: Verifique se existe explicitamente uma averbação, anotação, carimbo ou texto oficial informando a ADOÇÃO no documento. Classifique 'tem_averbacao_adocao' como true ou false.\n"
         "Regra 4: Extraia o nome completo da criança registrada ('nome_crianca').\n"
-        "Regra 5: Extraia a data de nascimento da criança no formato DD/MM/AAAA ('data_nascimento_crianca').\n"
+        "Regra 5: Extraia a data de nascimento da criança no formato DD/MM/AAAA ('data_nascimento_crianca'). ATENÇÃO À LEITURA DE DATAS (OCR): Inspecione minuciosamente a imagem antes de extrair. Cuidado com ranhuras, fundo de segurança do papel ou carimbos que possam confundir dígitos parecidos (ex: '1' com '7', '3' com '8', '0' com '6', ou '5' com '6').\n"
         "Regra 6: Extraia o sexo da criança ('sexo_crianca': 'Masculino' ou 'Feminino').\n"
         "Regra 7: Extraia a lista de nomes dos pais atuais (constantes na certidão ou na averbação de adoção) em uma lista de strings chamada 'nomes_pais_responsaveis'.\n"
         "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
@@ -168,9 +169,9 @@ generation_config_guarda_adocao = types.GenerateContentConfig(
         "Você é um auditor jurídico rigoroso de documentos judiciais (Termo de Guarda, Sentença ou Decisão Judicial para fins de adoção).\n"
         "Regra 1: Verifique se o documento é de origem judicial válida (Termo de Guarda, Sentença, Decisão). Classifique 'documento_judicial_valido' como true ou false.\n"
         "Regra 2: Verifique se o documento está legível e possui elementos de autenticidade (assinatura do juiz, carimbo oficial ou código de validação digital). Classifique 'legivel_e_autentico' como true ou false.\n"
-        "Regra 3: Verifique se o texto cita explicitamente que a guarda foi concedida para **Fins de Adoção** (ou estágio de convivência com finalidade adotiva). Classifique 'guarda_para_fins_de_adocao' como true ou false.\n"
+        "Regra 3: Verifique se o texto cita explicitamente que a guarda foi concedida para **Fins de Adoção** (or estágio de convivência com finalidade adotiva). Classifique 'guarda_para_fins_de_adocao' como true ou false.\n"
         "Regra 4: Extraia o nome completo da criança ou adolescente ('nome_crianca').\n"
-        "Regra 5: Extraia a data de nascimento da criança no formato DD/MM/AAAA, se houver ('data_nascimento_crianca'). Se não constar, retorne string vazia.\n"
+        "Regra 5: Extraia a data de nascimento da criança no formato DD/MM/AAAA, se houver ('data_nascimento_crianca'). Se não constar, retorne string vazia. ATENÇÃO À LEITURA DE DATAS (OCR): Inspecione minuciosamente marcas de carimbos ou impressões no texto para não confundir dígitos parecidos (ex: '1' com '7', '3' com '8', '0' com '6', '5' com '6').\n"
         "Regra 6: Extraia o nome completo do guardião/responsável legal nomeado no documento ('nome_guardiao').\n"
         "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
     ),
@@ -191,7 +192,9 @@ generation_config_guarda_adocao = types.GenerateContentConfig(
     }
 )
 
-# CONFIGURAÇÃO DE IA: B1 Declaração de União Estável
+# ---------------------------------------------------------------
+# CONFIGURAÇÃO DE IA: B1 (DECLARAÇÃO DE UNIÃO ESTÁVEL)
+# ---------------------------------------------------------------
 generation_config_uniao_estavel = types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",
@@ -200,7 +203,7 @@ generation_config_uniao_estavel = types.GenerateContentConfig(
         "Regra 1: Verifique se o documento é uma Declaração ou Escritura Pública de União Estável válida. Classifique 'documento_valido' como true ou false.\n"
         "Regra 2: Verifique se o documento possui carimbo, selo digital, etiqueta ou menção explícita de 'reconhecimento de firma' em cartório. Se não houver, classifique 'firma_reconhecida' como false.\n"
         "Regra 3: O reconhecimento de firma pode ser de QUALQUER cartório do Brasil (sem restrição de cidade). Classifique 'cartorio_valido' como true se possuir validação de cartório.\n"
-        "Regra 4 (EXTREMA IMPORTÂNCIA): Extraia **APENAS o nome completo** dos dois conviventes/companheiros nos campos 'nome_companheiro_1' e 'nome_companheiro_2'. NÃO inclua números, RGs, CPFs, endereços. DICA CRUCIAL: Caso os nomes preenchidos à mão no corpo do texto estejam ilegíveis, procure obrigatoriamente no carimbo/selo do cartório (geralmente na parte inferior), pois o selo de reconhecimento de firma por semelhança sempre contém os nomes impressos de forma perfeitamente legível.\n"
+        "Regra 4 (EXTREMA IMPORTÂNCIA): Extraia **APENAS o nome completo** dos dois conviventes/companheiros nos campos 'nome_companheiro_1' e 'nome_companheiro_2'. NÃO inclua números, RGs, CPFs, endereços. DICA CRUCIAL: Caso os nomes preenchidos à mão no corpo do texto estejam ilegíveis, procure obrigatoriamente no carimbo/selo do cartório (geralmente na parte inferior), pois o selo de reconhecimento de firma por semelhança sempre contém os nomes impressos de forma perfeitamente legível. ATENÇÃO A OCR: Cuidado com ranhuras de carimbos para não alucinar caracteres ou confundir letras e números.\n"
         "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
     ),
     response_schema={
@@ -216,7 +219,9 @@ generation_config_uniao_estavel = types.GenerateContentConfig(
     }
 )
 
-# CONFIGURAÇÃO DE IA: B2: Certidão de Casamento + Certidão de Nascimento
+# ---------------------------------------------------------------
+# CONFIGURAÇÃO DE IA: B2 (CERTIDÃO DE CASAMENTO / DIVÓRCIO)
+# ---------------------------------------------------------------
 generation_config_doc_complementar = types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",
@@ -224,7 +229,7 @@ generation_config_doc_complementar = types.GenerateContentConfig(
         "Você é um assistente especializado em extração de dados de documentos civis brasileiros.\n"
         "Sua tarefa: analisar uma certidão de casamento ou divórcio.\n"
         "Regra 1: Classifique 'documento_valido' como true se for certidão de casamento ou divórcio. Caso contrário, false.\n"
-        "Regra 2: Extraia o nome da pessoa ANTES e DEPOIS da mudança de nome.\n"
+        "Regra 2: Extraia o nome da pessoa ANTES e DEPOIS da mudança de nome. ATENÇÃO A OCR: Inspecione minuciosamente o documento antes da extração de dados. Cuidado com dobras no papel, selos ou ranhuras que possam confundir caracteres e números parecidos.\n"
         "Se for divórcio, o nome 'antes' é o nome de casada, 'depois' é o nome retomado.\n"
         "Se for casamento, o nome 'antes' é o solteiro, 'depois' é o de casada.\n"
         "OBS: NAO DAR RESPOSTA EXPLICATIVA"
@@ -252,7 +257,7 @@ generation_config_guarda_judicial = types.GenerateContentConfig(
         "Regra 1: Verifique se o documento é um Termo ou Certidão de Guarda válido. Classifique 'documento_valido' como true ou false.\n"
         "Regra 2: Verifique se o documento está totalmente legível. Classifique 'legivel' como true ou false.\n"
         "Regra 3: Verifique se o documento possui assinatura do juiz, carimbo oficial ou código de validação digital. Classifique 'autenticidade_judicial' como true ou false.\n"
-        "Regra 4: Extraia o nome completo da criança ou adolescente mencionado no documento ('nome_crianca').\n"
+        "Regra 4: Extraia o nome completo da criança ou adolescente mencionado no documento ('nome_crianca'). ATENÇÃO A OCR: Faça inspeção minuciosa na leitura de nomes e números, evitando confundir letras ou caracteres similares causados por falhas de impressão ou selos virtuais.\n"
         "Regra 5: Extraia o nome completo do(a) guardião(ã) nomeado(a) no documento ('nome_guardiao').\n"
         "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
     ),
@@ -280,7 +285,7 @@ generation_config_tutela_judicial = types.GenerateContentConfig(
         "Regra 1: Verifique se o documento é um Termo de Tutela válido. Classifique 'documento_valido' como true ou false.\n"
         "Regra 2: Verifique se o documento está totalmente legível. Classifique 'legivel' como true ou false.\n"
         "Regra 3: Verifique se o documento possui assinatura do juiz, carimbo oficial ou código de validação digital. Classifique 'autenticidade_judicial' como true ou false.\n"
-        "Regra 4: Extraia o nome completo da criança ou adolescente mencionado no documento ('nome_crianca').\n"
+        "Regra 4: Extraia o nome completo da criança ou adolescente mencionado no documento ('nome_crianca'). ATENÇÃO A OCR: Faça inspeção minuciosa na leitura de nomes e números, evitando confundir letras ou caracteres similares causados por falhas de impressão ou selos virtuais.\n"
         "Regra 5: Extraia o nome completo do(a) tutor(a) nomeado(a) no documento ('nome_tutor').\n"
         "OBS: NÃO DAR RESPOSTA EXPLICATIVA"
     ),
