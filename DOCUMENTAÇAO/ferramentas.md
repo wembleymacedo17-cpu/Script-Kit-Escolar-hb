@@ -44,3 +44,6 @@ gemini-1.5-flash
 
 
 streamlit run Revisor.py --server.port 8503
+
+
+IP do Usuário Real: Se você colocar um NGINX ou NGINX/ALB (Application Load Balancer) na frente da sua instância EC2, configurando o cabeçalho X-Forwarded-For corretamente, a sua função obter_ip_cliente() passará a capturar o IP real do celular/provedor do colaborador em vez de 127.0.0.1.

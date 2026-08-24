@@ -85,10 +85,14 @@ generation_config_declaracao_escolar = types.GenerateContentConfig(
         "   - Retorne false se não comprovar matrícula ou 'tipo_autenticidade' for 'Nenhuma'.\n\n"
 
         "4. Extração de Dados:\n"
-        "   - 'nome_aluno': Nome completo do aluno.\n"
-        "   - 'codigo_validacao': Chave ou código de validação (se houver, caso contrário null).\n"
-        "   - 'motivo_rejeicao': Motivo caso o documento seja inválido.\n"
-        "OBS: NÃO DAR RESPOSTA EXPLICATIVA."
+        "   - 'nome_aluno': Nome completo do aluno (se não houver aluno ou não for documento escolar, informe 'Não identificado').\n"
+        "   - 'codigo_validacao': Chave ou código de validação (se houver, caso contrário null).\n\n"
+
+        "5. Descrição de Conteúdo Incompatível e Motivo de Rejeição:\n"
+        "   - 'descricao_conteudo_invalido': Caso o arquivo enviado NÃO SEJA um documento escolar/acadêmico (ex: foto de animal/galinha, lista de compras, conta de luz, paisagem, etc.), descreva sucintamente o que é a imagem. Se for um documento escolar, retorne null.\n"
+        "   - 'motivo_rejeicao': Caso o documento seja inválido ou incompatível, forneça uma explicação clara e humanizada. Se houver 'descricao_conteudo_invalido', inclua essa descrição diretamente no motivo de rejeição (ex: 'O arquivo enviado trata-se de uma foto de lista de compras e não de uma declaração escolar').\n\n"
+
+        "OBS: NÃO DAR RESPOSTA EXPLICATIVA FORA DO JSON."
     ),
     response_schema={
         "type": "OBJECT",
@@ -102,6 +106,7 @@ generation_config_declaracao_escolar = types.GenerateContentConfig(
             },
             "codigo_validacao": {"type": "STRING", "nullable": True},
             "nome_aluno": {"type": "STRING"},
+            "descricao_conteudo_invalido": {"type": "STRING", "nullable": True},
             "motivo_rejeicao": {"type": "STRING", "nullable": True}
         },
         "required": [
@@ -359,40 +364,44 @@ def valida_declaracao_escolar(dados_declaracao: dict, nome_certidao: str):
     """
     Retorna: (sucesso: bool, mensagem_usuario: str, status_revisao_rh: str, motivo_detalhado_rh: str)
     """
-    if not dados_declaracao:
-        return False, "Não foi possível analisar a declaração escolar.", "Erro", "IA não conseguiu extrair dados do arquivo."
-        
-    if dados_declaracao.get("legivel") is False:
+    if not dados_declaracao or dados_declaracao.get("legivel") is False:
         return False, "A declaração escolar está ilegível.", "Erro", "Documento ilegível ou com baixa resolução."
 
-    if not dados_declaracao.get("tem_identificacao_escola"):
-        return False, "Documento sem identificação ou cabeçalho oficial da escola.", "Erro", "Falta timbre, CNPJ ou dados institucionais."
+    # Captura a descrição/motivo detalhado que o Gemini gerou no JSON
+    motivo_ia = dados_declaracao.get("motivo_rejeicao")
 
-    # Se a IA sinalizar suspeita de geração sintética / fraude
+    # 1. Trava de documento sem identificação ou imagem incompatível
+    if not dados_declaracao.get("tem_identificacao_escola"):
+        motivo_final = motivo_ia or "Documento sem identificação ou cabeçalho oficial da escola."
+        return False, f"Documento Rejeitado: {motivo_final}", "Erro", motivo_final
+
+    # 2. Trava de suspeita sintética / IA
     if dados_declaracao.get("eh_sintetico_suspeito") is True:
-        motivo_alerta = dados_declaracao.get("motivo_rejeicao") or "⚠️ ATENÇÃO RH: Documento com fortes indícios de geração por IA / edição sintética."
+        motivo_alerta = motivo_ia or "⚠️ ATENÇÃO RH: Documento com fortes indícios de geração por IA / edição sintética."
         msg_user = "Recebemos sua declaração escolar. Ela passará por uma verificação detalhada junto à equipe do RH."
         return True, msg_user, "Sim (Suspeita de Fraude IA)", motivo_alerta
 
     tipo_auth = dados_declaracao.get("tipo_autenticidade")
 
+    # 3. Trava de documento sem autenticidade válida ou não escolar
     if tipo_auth == "Nenhuma" or not dados_declaracao.get("eh_declaracao_matricula"):
-        motivo = dados_declaracao.get("motivo_rejeicao") or "Sem assinatura, carimbo físico ou código de validação."
-        return False, f"Documento Rejeitado: {motivo}", "Erro", motivo
+        motivo_final = motivo_ia or "Sem assinatura, carimbo físico ou código de validação."
+        return False, f"Documento Rejeitado: {motivo_final}", "Erro", motivo_final
 
-    # Validação do nome do aluno
+    # 4. Validação do nome do aluno
     nome_declaracao = (dados_declaracao.get("nome_aluno") or "").strip()
     if not nomes_correspondem_com_abreviacao(nome_declaracao, nome_certidao):
         motivo_nome = f"Divergência de Nome: Declaração consta '{nome_declaracao}' e Documento consta '{nome_certidao}'."
         return False, f"O nome na declaração ({nome_declaracao}) não confere com a identidade ({nome_certidao}).", "Erro", motivo_nome
 
-    # CASO: Declaração Digital ou Emitida via Sistema Sem Validador -> Envia pro RH com o motivo gravado
+    # 5. CASO DE SUCESSO COM QUARENTENA: Declaração Digital ou Sistema Sem Validador
     if tipo_auth in ["Digital", "Sistema_Sem_Validador"]:
         codigo = dados_declaracao.get("codigo_validacao") or "N/A"
-        motivo_rh = f"Declaração emitida via sistema ({tipo_auth}) sem carimbo físico/assinatura manual. Código extraído: {codigo}."
-        msg_user = "Sua declaração foi recebida! Como foi emitida via sistema escolar, nossa equipe do RH fará a conferência dos dados."
+        motivo_rh = f"Declaração emitida via sistema ({tipo_auth}) sem carimbo físico. Código extraído: {codigo}."
+        msg_user = "Sua declaração foi recebida! Como foi emitida via sistema escolar, nossa equipe do RH fará a conferência."
         return True, msg_user, "Sim (Validação Eletrônica)", motivo_rh
 
+    # 6. CASO DE SUCESSO DIRETO: Declaração física com carimbo/assinatura
     return True, f"Declaração física válida para {nome_declaracao}.", "Não", None
 
 # 🔹 ALTERAÇÃO: Mensagem genérica para quando for RG e o usuário não enviar a filiação
