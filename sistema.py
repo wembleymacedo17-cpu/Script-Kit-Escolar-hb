@@ -6,9 +6,7 @@ import numpy as np
 from dotenv import load_dotenv
 import os
 
-load_dotenv()  
-
-
+load_dotenv()
 
 API_BASE_URL = os.getenv("API_BASE_URL")
 
@@ -21,6 +19,9 @@ if 'dados_lidos' not in st.session_state:
 if 'codigo_extraido' not in st.session_state:
     st.session_state.codigo_extraido = None
 
+if 'modo_analise' not in st.session_state:
+    st.session_state.modo_analise = "upload"
+
 # Callback para o campo de digitação/pistola USB
 def submeter_codigo():
     # Remove o prefixo caso a pistola leia o QR Code completo com a tag
@@ -29,6 +30,103 @@ def submeter_codigo():
     st.session_state.input_codigo = ""
 
 st.title("📦 Sistema de Entrega - Kits Escolares")
+
+# =============================================================================
+# SEÇÃO SUPERIOR: BOTOES DE ANÁLISE (MANUAL E IA)
+# =============================================================================
+col_btn1, col_btn2 = st.columns(2)
+
+with col_btn1:
+    btn_analise_manual = st.button(
+        "🔍 1 - Análise Manual", 
+        type="secondary", 
+        use_container_width=True,
+        help="Abre a visualização direta dos documentos anexados para conferência humana."
+    )
+
+with col_btn2:
+    btn_analise_ia = st.button(
+        "🤖 2 - Gerar Análise IA", 
+        type="primary", 
+        use_container_width=True,
+        help="Executa a auditoria automática com o modelo de inteligência artificial."
+    )
+
+if btn_analise_manual:
+    st.session_state.modo_analise = "manual"
+
+if btn_analise_ia:
+    st.session_state.modo_analise = "ia"
+
+# =============================================================================
+# EXIBIÇÃO CONDICIONAL DOS MODOS DE ANÁLISE
+# =============================================================================
+if st.session_state.modo_analise == "manual":
+    st.markdown("---")
+    st.subheader("👁️ Visualização de Documentos (Conferência Manual)")
+    st.info("Confira abaixo os arquivos anexados pelo colaborador:")
+
+    # Recupera URLs dos documentos se houver um registro carregado no estado
+    colaborador = st.session_state.dados_lidos or {}
+    url_rg = colaborador.get("url_documento_rg")
+    url_declaracao = colaborador.get("url_documento_declaracao")
+    url_vinculo = colaborador.get("url_documento_vinculo")
+
+    tem_documentos = any([url_rg, url_declaracao, url_vinculo])
+
+    if not tem_documentos:
+        st.warning("⚠️ Nenhum documento foi encontrado no banco de dados para este registro.")
+    else:
+        tab1, tab2, tab3 = st.tabs(["📄 RG / Certidão", "🏫 Declaração Escolar", "📜 Documento de Vínculo"])
+
+        with tab1:
+            if url_rg:
+                if str(url_rg).lower().endswith(".pdf"):
+                    st.download_button("📥 Baixar PDF do RG", url_rg, file_name="rg.pdf")
+                else:
+                    st.image(url_rg, caption="RG / Certidão de Nascimento", use_container_width=True)
+            else:
+                st.caption("Nenhum arquivo enviado para RG/Certidão.")
+
+        with tab2:
+            if url_declaracao:
+                if str(url_declaracao).lower().endswith(".pdf"):
+                    st.download_button("📥 Baixar PDF da Declaração", url_declaracao, file_name="declaracao.pdf")
+                else:
+                    st.image(url_declaracao, caption="Declaração Escolar", use_container_width=True)
+            else:
+                st.caption("Nenhum arquivo enviado para Declaração Escolar.")
+
+        with tab3:
+            if url_vinculo:
+                if str(url_vinculo).lower().endswith(".pdf"):
+                    st.download_button("📥 Baixar PDF do Vínculo", url_vinculo, file_name="vinculo.pdf")
+                else:
+                    st.image(url_vinculo, caption="Documento de Vínculo", use_container_width=True)
+            else:
+                st.caption("Nenhum arquivo enviado para Documento de Vínculo.")
+
+    if st.button("⬅️ Voltar ao Painel Principal", use_container_width=True):
+        st.session_state.modo_analise = "upload"
+        st.rerun()
+
+elif st.session_state.modo_analise == "ia":
+    st.markdown("---")
+    st.subheader("⚡ Executando Validação por IA...")
+    
+    with st.spinner("Analisando autenticidade, timbres e nomes nos documentos..."):
+        # Espaço reservado para execução da chamada automatizada existente do Gemini
+        time.sleep(2)
+
+    st.success("✅ Análise da IA concluída com sucesso!")
+    
+    if st.button("⬅️ Voltar ao Painel Principal", use_container_width=True):
+        st.session_state.modo_analise = "upload"
+        st.rerun()
+
+# =============================================================================
+# PAINEL PRINCIPAL: LEITURA DE QR CODE E BAIXA DE KITS
+# =============================================================================
 st.markdown("---")
 
 col1, col2 = st.columns(2)

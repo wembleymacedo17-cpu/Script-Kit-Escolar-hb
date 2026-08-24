@@ -206,6 +206,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
 
                 colaborador["totp_secret"] = str(secret).strip()
                 colaborador["totp_ativo"] = True
+                st.session_state.autenticado_totp = True
                 
                 registrar_log(cracha_colab, "TOTP_ATIVADO_SUCESSO", "Primeiro acesso concluído e chave 2FA vinculada ao dispositivo.", ip_origem=ip_atual)
 
@@ -215,7 +216,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                     del st.session_state.identidade_confirmada
 
                 st.success("✅ Validador configurado com sucesso!")
-                st.rerun()
+                return True
             else:
                 registrar_log(cracha_colab, "FALHA_ATIVACAO_TOTP", "Código de 6 dígitos incorreto durante a tentativa de ativação.", ip_origem=ip_atual)
                 st.error("❌ Código incorreto. Verifique o relógio do celular e tente novamente.")
