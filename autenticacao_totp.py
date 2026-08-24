@@ -49,6 +49,11 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
     data_nasc_banco = colaborador.get("data_nascimento")
     cpf_banco = str(colaborador.get("cpf", "")).strip().zfill(11)
 
+    # Controle de tentativas na sessão para exibir avisos dinâmicos
+    chave_falhas = f"falhas_totp_{cracha_colab}"
+    if chave_falhas not in st.session_state:
+        st.session_state[chave_falhas] = 0
+
     # 🛑 BARREIRA PREVENTIVA: Bloqueia o Crachá (em vez do IP)
     if conta_esta_bloqueada(cracha_colab, limite_falhas=5, minutos=30):
         st.error(
@@ -91,7 +96,6 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 btn_validar_dados = st.form_submit_button("Confirmar Identidade", type="primary", use_container_width=True)
 
             if btn_validar_dados:
-                # 1. Normalização da Data do Banco
                 data_nasc_convertida = None
                 if data_nasc_banco:
                     if hasattr(data_nasc_banco, "date"):
@@ -106,11 +110,9 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                             except ValueError:
                                 continue
 
-                # 2. Higienização e validação do CPF Completo (remove pontos, traços e espaços)
                 cpf_digitado_limpo = re.sub(r'\D', '', cpf_digitado_input).zfill(11)
                 cpf_banco_limpo = re.sub(r'\D', '', cpf_banco).zfill(11)
 
-                # 3. Cruzamento Duplo
                 valida_data = (data_nasc_convertida and dt_informada == data_nasc_convertida)
                 valida_cpf = (len(cpf_digitado_limpo) == 11 and cpf_digitado_limpo == cpf_banco_limpo)
 
@@ -135,7 +137,6 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
         # -------------------------------------------------------------
         # LIBERAÇÃO DO QR CODE / CHAVE MANUAL APÓS CONFIRMAR IDENTIDADE
         # -------------------------------------------------------------
-        
         if "temp_totp_secret" not in st.session_state:
             st.session_state.temp_totp_secret = pyotp.random_base32()
 
@@ -156,9 +157,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
         with tab_celular:
             st.markdown("### 📋 Configuração Manual")
             st.caption("Clique no ícone de copiar à direita do código abaixo:")
-            
             st.code(secret, language=None)
-            
             st.markdown("---")
             st.markdown("""
             **Passo a passo no celular:**
@@ -177,7 +176,6 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 f'<div style="text-align: center; margin: 15px 0;"><img src="data:image/png;base64,{img_b64}" width="200"></div>',
                 unsafe_allow_html=True
             )
-            
             st.markdown("---")
             st.markdown("""
             **Passo a passo no computador:**
@@ -207,6 +205,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 colaborador["totp_secret"] = str(secret).strip()
                 colaborador["totp_ativo"] = True
                 st.session_state.autenticado_totp = True
+                st.session_state[chave_falhas] = 0  # Reseta contador em caso de sucesso
                 
                 registrar_log(cracha_colab, "TOTP_ATIVADO_SUCESSO", "Primeiro acesso concluído e chave 2FA vinculada ao dispositivo.", ip_origem=ip_atual)
 
@@ -218,8 +217,15 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 st.success("✅ Validador configurado com sucesso!")
                 return True
             else:
+                st.session_state[chave_falhas] += 1
+                tentativas_restantes = max(0, 5 - st.session_state[chave_falhas])
+                
                 registrar_log(cracha_colab, "FALHA_ATIVACAO_TOTP", "Código de 6 dígitos incorreto durante a tentativa de ativação.", ip_origem=ip_atual)
-                st.error("❌ Código incorreto. Verifique o relógio do celular e tente novamente.")
+                st.error(f"❌ Código incorreto. Você tem **{tentativas_restantes}** tentativa(s) restante(s) antes do bloqueio de 30 minutos.")
+                
+                # Aviso de relógio a partir do 2º erro
+                if st.session_state[chave_falhas] >= 2:
+                    st.warning("⚠️ **Dica de relógio:** Verifique se a **data e a hora** do seu celular/dispositivo estão configuradas para sincronização automática com a rede. Relógios dessincronizados impedem a validação do código.")
 
         return False
 
@@ -234,10 +240,18 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
 
         if btn_entrar:
             if validar_codigo_totp(secret_cadastrado, codigo_login):
+                st.session_state[chave_falhas] = 0  # Reseta contador em caso de sucesso
                 registrar_log(cracha_colab, "LOGIN_TOTP_SUCESSO", "Acesso autorizado via código 2FA.", ip_origem=ip_atual)
                 return True
             else:
+                st.session_state[chave_falhas] += 1
+                tentativas_restantes = max(0, 6 - st.session_state[chave_falhas])
+                
                 registrar_log(cracha_colab, "FALHA_LOGIN_TOTP", "Código TOTP inválido ou expirado digitado no login recorrente.", ip_origem=ip_atual)
-                st.error("❌ Código inválido ou expirado. Tente novamente.")
+                st.error(f"❌ Código inválido ou expirado. Você tem **{tentativas_restantes}** tentativa(s) restante(s) antes do bloqueio temporário de 30 minutos.")
+                
+                # Aviso de relógio a partir do 2º erro
+                if st.session_state[chave_falhas] >= 3:
+                    st.warning("⚠️ **Dica importante:** Verifique se a **data e a hora do seu celular** estão sincronizadas automaticamente. Diferenças de horário invalidam os códigos gerados pelo autenticador.")
 
         return False

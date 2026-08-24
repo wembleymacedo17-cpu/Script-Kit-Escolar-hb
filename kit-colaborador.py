@@ -430,39 +430,63 @@ def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
     return False, erro_msg
 
 
-def executar_gemini_com_fallback(contents_data, config_schema, status_spinner=None, tentativas_por_modelo=2):
-    for modelo in MODELOS_GEMINI:
-        if status_spinner:
-            status_spinner.update(label=f"Analisando documento via IA... Aguarde --- ({modelo})")
-            
-        for tentativa in range(1, tentativas_por_modelo + 1):
-            try:
-                print(f"  [IA Studio] Testando modelo '{modelo}' (Tentativa {tentativa}/{tentativas_por_modelo})...")
+def executar_gemini_com_fallback(contents_data, config_schema, titulo_doc="documento", tentativas_por_modelo=2):
+    """
+    Executa a análise da IA exibindo feedback em tempo real no Streamlit
+    sobre tentativas, retries e alternância de modelos.
+    """
+    with st.status(f"🔍 Analisando {titulo_doc} via IA...", expanded=True) as status:
+        for index_modelo, modelo in enumerate(MODELOS_GEMINI, start=1):
+            for tentativa in range(1, tentativas_por_modelo + 1):
                 
-                response = client_gemini.models.generate_content(
-                    model=modelo,
-                    contents=contents_data,
-                    config=config_schema,
-                )
+                msg_progresso = f"Conectando ao modelo `{modelo}` (Tentativa {tentativa}/{tentativas_por_modelo})..."
+                status.update(label=f"⏳ Analisando {titulo_doc} no modelo `{modelo}` ({tentativa}/{tentativas_por_modelo})...", state="running")
+                status.write(f"🤖 **[IA Studio]** {msg_progresso}")
                 
-                texto_limpo = response.text.strip()
-                dados_json = json.loads(texto_limpo)
-                
-                print(f"  Sucesso na leitura usando o modelo '{modelo}'!")
-                return dados_json, None
-            except json.JSONDecodeError:
-                return None, "  Resposta da IA em formato inesperado. Tente novamente."
-            except Exception as e:
-                erro_str = str(e).lower()
-                print(f"  ERRO CAPTURADO [{modelo}]: {repr(e)}")
-                tem_retry = any(cod in erro_str for cod in ERROS_RETRY)
-                if tem_retry and tentativa < tentativas_por_modelo:
-                    time.sleep(tentativa * 3)
-                    continue
-                elif tem_retry:
-                    break
+                # Aviso de conforto ao usuário se houver retry ou fallback de modelo
+                if tentativa > 1 or index_modelo > 1:
+                    status.write("⚠️ *Estamos demorando mais que o normal para processar devido à alta demanda. Por favor, aguarde até finalizar e **NÃO recarregue a página**...*")
+
+                try:
+                    response = client_gemini.models.generate_content(
+                        model=modelo,
+                        contents=contents_data,
+                        config=config_schema,
+                    )
                     
-    return None, "  Todos os serviços de IA estão com alta demanda momentânea. Por favor, tente novamente em alguns instantes."
+                    texto_limpo = response.text.strip()
+                    dados_json = json.loads(texto_limpo)
+                    
+                    status.write(f"✅ Sucesso na leitura usando o modelo `{modelo}`!")
+                    status.update(label=f"✅ Análise do {titulo_doc} concluída!", state="complete", expanded=False)
+                    return dados_json, None
+
+                except json.JSONDecodeError:
+                    status.write(f"❌ Resposta da IA em formato inesperado no modelo `{modelo}`.")
+                    return None, "Resposta da IA em formato inesperado. Tente novamente."
+
+                except Exception as e:
+                    erro_str = str(e).lower()
+                    status.write(f"⚠️ Erro ao comunicar com `{modelo}`: {e}")
+                    
+                    tem_retry = any(cod in erro_str for cod in ERROS_RETRY)
+                    if tem_retry and tentativa < tentativas_por_modelo:
+                        status.write("🔄 Aguardando 3 segundos antes do retry...")
+                        time.sleep(3)
+                        continue
+                    elif tem_retry:
+                        if index_modelo < len(MODELOS_GEMINI):
+                            proximo = MODELOS_GEMINI[index_modelo]
+                            status.write(f"🔀 Alternando agente para o modelo reserva **{proximo}**...")
+                            time.sleep(1)
+                        break
+                    else:
+                        break
+
+        status.update(label=f"❌ Falha no processamento do {titulo_doc}.", state="error")
+        return None, "Todos os serviços de IA estão com alta demanda momentânea. Por favor, tente novamente em alguns instantes."
+
+
 
 
 def analisa_certidao(arquivo):
@@ -474,7 +498,7 @@ def analisa_certidao(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise o documento e retorne os dados no formato estruturado."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_certidao)
+        return executar_gemini_com_fallback(contents, generation_config_certidao, titulo_doc="Documento de Identidade")
     except Exception:
         return None, "Erro ao ler o arquivo. Tente fazer o upload novamente."
 
@@ -487,7 +511,7 @@ def analisa_declaracao_escolar(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise esta declaração escolar e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_declaracao_escolar)
+        return executar_gemini_com_fallback(contents, generation_config_declaracao_escolar, titulo_doc="Declaração Escolar")
     except Exception:
         return None, "Erro ao ler a declaração escolar. Tente fazer o upload novamente."
 
@@ -501,7 +525,7 @@ def analisa_uniao_estavel(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise esta declaração de união estável e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_uniao_estavel)
+        return executar_gemini_com_fallback(contents, generation_config_uniao_estavel, titulo_doc="União Estável")
     except Exception:
         return None, "Erro ao ler o arquivo de união estável."
 
@@ -514,7 +538,7 @@ def analisa_guarda_adocao(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise este documento judicial de guarda para fins de adoção e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_guarda_adocao)
+        return executar_gemini_com_fallback(contents, generation_config_guarda_adocao, titulo_doc="Guarda para Adoção")
     except Exception:
         return None, "Erro ao ler o arquivo de guarda para adoção."
 
@@ -527,7 +551,7 @@ def analisa_certidao_averbacao(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise esta certidão de nascimento com averbação de adoção e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_adocao_averbacao)
+        return executar_gemini_com_fallback(contents, generation_config_adocao_averbacao, titulo_doc="Certidão com Averbação")
     except Exception:
         return None, "Erro ao ler a certidão averbada."
 def analisa_guarda_judicial(arquivo):
@@ -539,7 +563,7 @@ def analisa_guarda_judicial(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise este termo ou certidão de guarda judicial e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_guarda_judicial)
+        return executar_gemini_com_fallback(contents, generation_config_guarda_judicial, titulo_doc="Guarda Judicial")
     except Exception:
         return None, "Documento(s) ausente(s) ou ilegível(is)"
 
@@ -552,7 +576,7 @@ def analisa_tutela_judicial(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise este termo de tutela judicial e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_tutela_judicial)
+        return executar_gemini_com_fallback(contents, generation_config_tutela_judicial, titulo_doc="Tutela Judicial")
     except Exception:
         return None, "Documento(s) ausente(s) ou ilegível(is)"
 
@@ -565,7 +589,7 @@ def analisa_certidao_complementar(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise o documento e retorne os dados no formato estruturado."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_doc_complementar)
+        return executar_gemini_com_fallback(contents, generation_config_doc_complementar, titulo_doc="Certidão de Casamento/Divórcio")
     except Exception:
         return None, "Erro ao ler o arquivo de casamento/divórcio."
 
