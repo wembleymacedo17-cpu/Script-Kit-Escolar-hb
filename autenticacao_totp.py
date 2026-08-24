@@ -5,7 +5,7 @@ import qrcode
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime, date
-from database import registrar_log, ip_esta_bloqueado, obter_ip_cliente
+from database import registrar_log, conta_esta_bloqueada, obter_ip_cliente
 
 
 def gerar_secret_totp():
@@ -35,26 +35,27 @@ def validar_codigo_totp(secret_key: str, codigo_digitado: str) -> bool:
 
 
 def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
-    """Interface do Streamlit para o fluxo de TOTP com Trava Dupla, Proteção de IP e Auditoria."""
+    """Interface do Streamlit para o fluxo de TOTP com Trava Dupla, Proteção de Conta e Auditoria."""
     st.subheader("🔒 Validação de Segurança (2FA)")
 
     ip_atual = obter_ip_cliente()
-
-    # 🛑 BARREIRA PREVENTIVA: Se o IP exceder 5 erros em 15 minutos, bloqueia o formulário.
-    if ip_esta_bloqueado(ip_atual, limite_falhas=5, minutos=15):
-        st.error(
-            f"🚨 **Acesso temporariamente bloqueado por segurança.**\n\n"
-            f"Detectamos múltiplas tentativas de acesso incorretas a partir da sua rede (`{ip_atual}`). "
-            f"Por favor, aguarde 15 minutos antes de tentar novamente."
-        )
-        return False
-
+    
+    # Variáveis do colaborador
     nome_colab = colaborador.get("Nome") or colaborador.get("nome") or "Colaborador"
     cracha_colab = colaborador.get("Crachá") or colaborador.get("cracha") or colaborador.get("id")
     secret_cadastrado = colaborador.get("totp_secret")
     
     data_nasc_banco = colaborador.get("data_nascimento")
     cpf_banco = str(colaborador.get("cpf", "")).strip().zfill(11)
+
+    # 🛑 BARREIRA PREVENTIVA: Bloqueia o Crachá (em vez do IP)
+    if conta_esta_bloqueada(cracha_colab, limite_falhas=5, minutos=30):
+        st.error(
+            f"🚨 **Acesso temporariamente bloqueado por segurança.**\n\n"
+            f"Detectamos múltiplas tentativas de acesso incorretas para o crachá `{cracha_colab}`. "
+            f"Por favor, aguarde 30 minutos antes de tentar novamente."
+        )
+        return False
 
     # -------------------------------------------------------------
     # FLUXO 1: PRIMEIRO ACESSO (Confirmação de Identidade pré-QR Code)
@@ -131,11 +132,9 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
             return False
 
         # -------------------------------------------------------------
-        # LIBERAÇÃO DO QR CODE APÓS CONFIRMAR IDENTIDADE
+        # LIBERAÇÃO DO QR CODE / CHAVE MANUAL APÓS CONFIRMAR IDENTIDADE
         # -------------------------------------------------------------
-        st.markdown("1️⃣ Baixe o aplicativo **Google Authenticator** ou **Authy** na loja do seu celular.")
-        st.markdown("2️⃣ Abra o aplicativo, selecione **Ler QR Code** e aponte a câmera:")
-
+        
         if "temp_totp_secret" not in st.session_state:
             st.session_state.temp_totp_secret = pyotp.random_base32()
 
@@ -149,11 +148,45 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
         img.save(buffered, format="PNG")
         img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-        st.markdown(
-            f'<div style="text-align: center; margin: 15px 0;"><img src="data:image/png;base64,{img_b64}" width="200"></div>',
-            unsafe_allow_html=True
-        )
-        st.caption(f"Chave de inserção manual: `{secret}`")
+        st.info("Escolha como deseja configurar o seu aplicativo autenticador:")
+
+        tab_celular, tab_pc = st.tabs(["📱 Estou acessando pelo Celular", "💻 Estou acessando pelo Computador"])
+
+        with tab_celular:
+            st.markdown("### 📋 Configuração Manual")
+            st.caption("Clique no ícone de copiar à direita do código abaixo:")
+            
+            st.code(secret, language=None)
+            
+            st.markdown("---")
+            st.markdown("""
+            **Passo a passo no celular:**
+            1. Abra o app **Google Authenticator** ou **Authy**.
+            2. Clique no **+** (canto inferior direito).
+            3. Escolha **Inserir chave de configuração**.
+            4. Nome da conta: `Funfarme - Kit Escolar`.
+            5. Cole a chave copiada acima e clique em **Adicionar**.
+            6. **Copie o código de 6 dígitos gerado no app e cole no campo abaixo.**
+            """)
+
+        with tab_pc:
+            st.markdown("### 📷 Ler QR Code")
+            st.caption("Ideal se você está no computador e com o celular em mãos:")
+            st.markdown(
+                f'<div style="text-align: center; margin: 15px 0;"><img src="data:image/png;base64,{img_b64}" width="200"></div>',
+                unsafe_allow_html=True
+            )
+            
+            st.markdown("---")
+            st.markdown("""
+            **Passo a passo no computador:**
+            1. Abra o app **Google Authenticator** ou **Authy** no seu celular.
+            2. Clique no **+** (canto inferior direito).
+            3. Escolha **Ler QR Code**.
+            4. Aponte a câmera do celular para a imagem acima.
+            5. **Digite o código de 6 dígitos gerado no app no campo abaixo.**
+            """)
+
         st.divider()
 
         with st.form("form_ativar_totp"):
@@ -181,7 +214,7 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                     del st.session_state.identidade_confirmada
 
                 st.success("✅ Validador configurado com sucesso!")
-                return True
+                st.rerun()
             else:
                 registrar_log(cracha_colab, "FALHA_ATIVACAO_TOTP", "Código de 6 dígitos incorreto durante a tentativa de ativação.", ip_origem=ip_atual)
                 st.error("❌ Código incorreto. Verifique o relógio do celular e tente novamente.")

@@ -240,20 +240,21 @@ def registrar_log(cracha: int, acao: str, detalhes: str = None, ip_origem: str =
         db.close()
 
 
-def ip_esta_bloqueado(ip_cliente: str = None, limite_falhas: int = 5, minutos: int = 15) -> bool:
-    """Verifica se o IP acumulou falhas excessivas na janela de tempo."""
-    ip_alvo = ip_cliente or obter_ip_cliente()
+def conta_esta_bloqueada(cracha: int, limite_falhas: int = 5, minutos: int = 30) -> bool:
+    """Verifica se o crachá do colaborador acumulou falhas excessivas na janela de tempo."""
+    if not cracha:
+        return False
     db = SessionLocal()
     try:
         limite_tempo = datetime.now(timezone.utc) - timedelta(minutes=minutos)
         total_falhas = db.query(LogAuditoria).filter(
-            LogAuditoria.ip_origem == ip_alvo,
+            LogAuditoria.cracha == cracha,
             LogAuditoria.acao.in_(["FALHA_CONFIRMACAO_IDENTIDADE", "FALHA_ATIVACAO_TOTP", "FALHA_LOGIN_TOTP"]),
             LogAuditoria.data_hora >= limite_tempo
         ).count()
         return total_falhas >= limite_falhas
     except Exception as e:
-        print(f"⚠️ Erro ao checar bloqueio de IP: {e}")
+        print(f"⚠️ Erro ao checar bloqueio de conta: {e}")
         return False
     finally:
         db.close()
