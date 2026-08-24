@@ -1,5 +1,6 @@
 import io
 import base64
+import re
 import pyotp
 import qrcode
 import streamlit as st
@@ -73,11 +74,11 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    cpf_3_digitos = st.text_input(
-                        "3 primeiros dígitos do CPF:", 
-                        max_chars=3, 
-                        placeholder="Ex: 123",
-                        help="Digite apenas os 3 primeiros números do seu CPF"
+                    cpf_digitado_input = st.text_input(
+                        "CPF Completo:", 
+                        max_chars=14, 
+                        placeholder="Ex: 123.456.789-00",
+                        help="Digite todos os 11 dígitos do seu CPF (com ou sem pontuação)"
                     )
                 with col2:
                     dt_informada = st.date_input(
@@ -105,23 +106,23 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                             except ValueError:
                                 continue
 
-                # 2. Validação dos 3 primeiros dígitos do CPF
-                tres_primeiros_banco = cpf_banco[:3] if len(cpf_banco) >= 3 else ""
-                cpf_digitado_limpo = cpf_3_digitos.strip()
+                # 2. Higienização e validação do CPF Completo (remove pontos, traços e espaços)
+                cpf_digitado_limpo = re.sub(r'\D', '', cpf_digitado_input).zfill(11)
+                cpf_banco_limpo = re.sub(r'\D', '', cpf_banco).zfill(11)
 
                 # 3. Cruzamento Duplo
                 valida_data = (data_nasc_convertida and dt_informada == data_nasc_convertida)
-                valida_cpf = (tres_primeiros_banco and cpf_digitado_limpo == tres_primeiros_banco)
+                valida_cpf = (len(cpf_digitado_limpo) == 11 and cpf_digitado_limpo == cpf_banco_limpo)
 
                 if valida_data and valida_cpf:
                     st.session_state.identidade_confirmada = True
-                    registrar_log(cracha_colab, "CONFIRMACAO_IDENTIDADE_SUCESSO", "Data de nascimento e 3 dígitos do CPF validados com sucesso.", ip_origem=ip_atual)
+                    registrar_log(cracha_colab, "CONFIRMACAO_IDENTIDADE_SUCESSO", "Data de nascimento e CPF completo validados com sucesso.", ip_origem=ip_atual)
                     st.success("✅ Identidade confirmada!")
                     st.rerun()
                 else:
                     erros_identidade = []
                     if not valida_cpf:
-                        erros_identidade.append("3 primeiros dígitos do CPF incorretos.")
+                        erros_identidade.append("CPF incorreto ou incompleto.")
                     if not valida_data:
                         erros_identidade.append("Data de nascimento incorreta.")
                     
