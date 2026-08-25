@@ -16,7 +16,7 @@ from datetime import datetime
 import time 
 from rate_limiter import verificar_limite_clique
 # ==================== IMPORTS DO BANCO ====================
-from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada
+from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada, registrar_log
 from conector_oracle import OracleConnector
 from conector_Postgre import SupabaseConnector
 import boto3
@@ -430,39 +430,63 @@ def valida_nome_pais_certidao(dados_certidao: dict, nome_colaborador: str):
     return False, erro_msg
 
 
-def executar_gemini_com_fallback(contents_data, config_schema, status_spinner=None, tentativas_por_modelo=2):
-    for modelo in MODELOS_GEMINI:
-        if status_spinner:
-            status_spinner.update(label=f"Analisando documento via IA... Aguarde --- ({modelo})")
-            
-        for tentativa in range(1, tentativas_por_modelo + 1):
-            try:
-                print(f"  [IA Studio] Testando modelo '{modelo}' (Tentativa {tentativa}/{tentativas_por_modelo})...")
+def executar_gemini_com_fallback(contents_data, config_schema, titulo_doc="documento", tentativas_por_modelo=2):
+    """
+    Executa a análise da IA exibindo feedback em tempo real no Streamlit
+    sobre tentativas, retries e alternância de modelos.
+    """
+    with st.status(f"🔍 Analisando {titulo_doc} via IA...", expanded=True) as status:
+        for index_modelo, modelo in enumerate(MODELOS_GEMINI, start=1):
+            for tentativa in range(1, tentativas_por_modelo + 1):
                 
-                response = client_gemini.models.generate_content(
-                    model=modelo,
-                    contents=contents_data,
-                    config=config_schema,
-                )
+                msg_progresso = f"Conectando ao modelo `{modelo}` (Tentativa {tentativa}/{tentativas_por_modelo})..."
+                status.update(label=f"⏳ Analisando {titulo_doc} no modelo `{modelo}` ({tentativa}/{tentativas_por_modelo})...", state="running")
+                status.write(f"🤖 **[IA Studio]** {msg_progresso}")
                 
-                texto_limpo = response.text.strip()
-                dados_json = json.loads(texto_limpo)
-                
-                print(f"  Sucesso na leitura usando o modelo '{modelo}'!")
-                return dados_json, None
-            except json.JSONDecodeError:
-                return None, "  Resposta da IA em formato inesperado. Tente novamente."
-            except Exception as e:
-                erro_str = str(e).lower()
-                print(f"  ERRO CAPTURADO [{modelo}]: {repr(e)}")
-                tem_retry = any(cod in erro_str for cod in ERROS_RETRY)
-                if tem_retry and tentativa < tentativas_por_modelo:
-                    time.sleep(tentativa * 3)
-                    continue
-                elif tem_retry:
-                    break
+                # Aviso de conforto ao usuário se houver retry ou fallback de modelo
+                if tentativa > 1 or index_modelo > 1:
+                    status.write("⚠️ *Estamos demorando mais que o normal para processar devido à alta demanda. Por favor, aguarde até finalizar e **NÃO recarregue a página**...*")
+
+                try:
+                    response = client_gemini.models.generate_content(
+                        model=modelo,
+                        contents=contents_data,
+                        config=config_schema,
+                    )
                     
-    return None, "  Todos os serviços de IA estão com alta demanda momentânea. Por favor, tente novamente em alguns instantes."
+                    texto_limpo = response.text.strip()
+                    dados_json = json.loads(texto_limpo)
+                    
+                    status.write(f"✅ Sucesso na leitura usando o modelo `{modelo}`!")
+                    status.update(label=f"✅ Análise do {titulo_doc} concluída!", state="complete", expanded=False)
+                    return dados_json, None
+
+                except json.JSONDecodeError:
+                    status.write(f"❌ Resposta da IA em formato inesperado no modelo `{modelo}`.")
+                    return None, "Resposta da IA em formato inesperado. Tente novamente."
+
+                except Exception as e:
+                    erro_str = str(e).lower()
+                    status.write(f"⚠️ Erro ao comunicar com `{modelo}`: {e}")
+                    
+                    tem_retry = any(cod in erro_str for cod in ERROS_RETRY)
+                    if tem_retry and tentativa < tentativas_por_modelo:
+                        status.write("🔄 Aguardando 3 segundos antes do retry...")
+                        time.sleep(3)
+                        continue
+                    elif tem_retry:
+                        if index_modelo < len(MODELOS_GEMINI):
+                            proximo = MODELOS_GEMINI[index_modelo]
+                            status.write(f"🔀 Alternando agente para o modelo reserva **{proximo}**...")
+                            time.sleep(1)
+                        break
+                    else:
+                        break
+
+        status.update(label=f"❌ Falha no processamento do {titulo_doc}.", state="error")
+        return None, "Todos os serviços de IA estão com alta demanda momentânea. Por favor, tente novamente em alguns instantes."
+
+
 
 
 def analisa_certidao(arquivo):
@@ -474,7 +498,7 @@ def analisa_certidao(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise o documento e retorne os dados no formato estruturado."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_certidao)
+        return executar_gemini_com_fallback(contents, generation_config_certidao, titulo_doc="Documento de Identidade")
     except Exception:
         return None, "Erro ao ler o arquivo. Tente fazer o upload novamente."
 
@@ -487,7 +511,7 @@ def analisa_declaracao_escolar(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise esta declaração escolar e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_declaracao_escolar)
+        return executar_gemini_com_fallback(contents, generation_config_declaracao_escolar, titulo_doc="Declaração Escolar")
     except Exception:
         return None, "Erro ao ler a declaração escolar. Tente fazer o upload novamente."
 
@@ -501,7 +525,7 @@ def analisa_uniao_estavel(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise esta declaração de união estável e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_uniao_estavel)
+        return executar_gemini_com_fallback(contents, generation_config_uniao_estavel, titulo_doc="União Estável")
     except Exception:
         return None, "Erro ao ler o arquivo de união estável."
 
@@ -514,7 +538,7 @@ def analisa_guarda_adocao(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise este documento judicial de guarda para fins de adoção e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_guarda_adocao)
+        return executar_gemini_com_fallback(contents, generation_config_guarda_adocao, titulo_doc="Guarda para Adoção")
     except Exception:
         return None, "Erro ao ler o arquivo de guarda para adoção."
 
@@ -527,7 +551,7 @@ def analisa_certidao_averbacao(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise esta certidão de nascimento com averbação de adoção e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_adocao_averbacao)
+        return executar_gemini_com_fallback(contents, generation_config_adocao_averbacao, titulo_doc="Certidão com Averbação")
     except Exception:
         return None, "Erro ao ler a certidão averbada."
 def analisa_guarda_judicial(arquivo):
@@ -539,7 +563,7 @@ def analisa_guarda_judicial(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise este termo ou certidão de guarda judicial e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_guarda_judicial)
+        return executar_gemini_com_fallback(contents, generation_config_guarda_judicial, titulo_doc="Guarda Judicial")
     except Exception:
         return None, "Documento(s) ausente(s) ou ilegível(is)"
 
@@ -552,7 +576,7 @@ def analisa_tutela_judicial(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise este termo de tutela judicial e extraia os dados conforme as regras."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_tutela_judicial)
+        return executar_gemini_com_fallback(contents, generation_config_tutela_judicial, titulo_doc="Tutela Judicial")
     except Exception:
         return None, "Documento(s) ausente(s) ou ilegível(is)"
 
@@ -565,7 +589,7 @@ def analisa_certidao_complementar(arquivo):
             types.Part.from_bytes(data=arquivo_bytes, mime_type=mime_type),
             "Analise o documento e retorne os dados no formato estruturado."
         ]
-        return executar_gemini_com_fallback(contents, generation_config_doc_complementar)
+        return executar_gemini_com_fallback(contents, generation_config_doc_complementar, titulo_doc="Certidão de Casamento/Divórcio")
     except Exception:
         return None, "Erro ao ler o arquivo de casamento/divórcio."
 
@@ -829,23 +853,25 @@ def adicionar_dependentes():
                     urls = []
                     if certidao:
                         u_identidade = upload_documento_supabase(certidao, "identidade", cracha_colab)
-                        if u_identidade:
-                            urls.append(u_identidade)
+                        if u_identidade: urls.append(u_identidade)
                     if declaracao_escolar:
                         u_declaracao = upload_documento_supabase(declaracao_escolar, "declaracao", cracha_colab)
-                        if u_declaracao:
-                            urls.append(u_declaracao)
+                        if u_declaracao: urls.append(u_declaracao)
                     
                     url_doc = ",".join(urls) if urls else None
                 except Exception as e:
                     url_doc = None
             
             erro_salvo = st.session_state.erro_ia_a1
-            st.session_state.erro_ia_a1 = None  # Limpa o erro do estado
+            st.session_state.erro_ia_a1 = None
             nome_final = padroniza_texto(nome_filho)
             
             st.warning("⚠️ O documento foi enviado para a Análise Visual e Manual do RH. Sua solicitação está em quarentena.")
             time.sleep(2)
+            
+            # --- 📌 LOG AUDITORIA (BYPASS A1) ---
+            registrar_log(st.session_state.colaborador['Crachá'], "ENVIO_RH_BYPASS", f"Bypass forçado (A1). Erro contornado: {erro_salvo}")
+            registrar_log(st.session_state.colaborador['Crachá'], "DEPENDENTE_CARRINHO_ADD", f"Dependente adicionado via Bypass.")
             
             return {
                 "ID_Dependente": None,
@@ -889,8 +915,6 @@ def adicionar_dependentes():
         if erro_declaracao:
             st.session_state.erro_ia_a1 = erro_declaracao
             st.rerun()
-
-        
        
         declaracao_ok, msg_declaracao, status_rh_decl, motivo_rh_detalhado = valida_declaracao_escolar(
             dados_declaracao, dados_certidao.get("nome_crianca") or nome_filho
@@ -900,26 +924,32 @@ def adicionar_dependentes():
             dados_certidao, st.session_state.colaborador['Nome']
         )
 
-        # Trata falhas de validação da IA
         tem_erro_ia = not declaracao_ok or not valido_pais
         
         if tem_erro_ia:
             mensagem_erro_atual = msg_declaracao if not declaracao_ok else mensagem_pais
+            
+            # --- 📌 LOG AUDITORIA (FALHA A1) ---
+            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A1: {mensagem_erro_atual}")
+            
             st.session_state.erro_ia_a1 = mensagem_erro_atual
-            st.rerun() # Recarrega a tela exibindo o checkbox de bypass
+            st.rerun() 
 
-        # Sucesso da validação da IA
         st.session_state.erro_ia_a1 = None
         
-        # 🎯 EXIBIÇÃO DO AVISO DE QUARENTENA / APROVAÇÃO DIRETA
         if status_rh_decl and str(status_rh_decl).startswith("Sim"):
             st.warning(f"⚠️ **Aviso de Cadastro:** {msg_declaracao}")
-            time.sleep(3.5)  # Dá tempo do colaborador ler a mensagem antes do rerun
+            time.sleep(3.5)
         else:
             st.success("✅ Documento validado com sucesso pela IA!")
             time.sleep(1.5)
 
         nome_final = padroniza_texto(dados_certidao.get("nome_crianca") or nome_filho)
+        
+        # --- 📌 LOG AUDITORIA (SUCESSO A1) ---
+        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_SUCESSO", "Validação A1 aprovada (ou enviada para quarentena técnica).")
+        registrar_log(st.session_state.colaborador['Crachá'], "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final} validado pela IA e adicionado.")
+
         return {
             "ID_Dependente": None,
             "ID_Colaborador": st.session_state.colaborador['Crachá'],
@@ -930,7 +960,7 @@ def adicionar_dependentes():
             "Ano_escolar": st.session_state.ano_escolar,
             "revisao_rh": status_rh_decl,  
             "Fluxo_Documento": "A1 - Identidade (Cert/RG) + Declaração Escolar (Filho Biológico)",
-            "motivo_reprova_ia": motivo_rh_detalhado,  # 🎯 Grava o motivo exato do RH no banco
+            "motivo_reprova_ia": motivo_rh_detalhado,
             "url_documento": None,
             "aceite_ia": aceite_ia,
             "aceite_lgpd": aceite_lgpd,
@@ -1054,6 +1084,7 @@ def editar_kits_existentes(id_colaborador):
                 db.commit()
                 
                 # Armazena a mensagem de sucesso na sessão para exibir na tela inicial
+                registrar_log(id_colaborador, "KIT_EDICAO_SALVA", f"Novos kits selecionados: {novo_resumo_str}")
                 st.session_state.mensagem_sucesso = "✅ Kit atualizado com sucesso!"
                 
                 # Reseta a sessão para voltar ao estado inicial (Busca por crachá)
@@ -1432,6 +1463,7 @@ def escolher_kits_colaborador():
                 st.session_state.escolhas_kits = novas_escolhas
                 st.session_state.aguardando_ciencia_kits = False
                 st.session_state.escolhas_pendentes_kits = []
+                registrar_log(id_colaborador, "KIT_SELECIONADO", f"Escolha confirmada para {len(novas_escolhas)} kit(s).")
                 st.success("🎉 Kits escolhidos com sucesso!")
                 return novas_escolhas
             finally:
@@ -1728,6 +1760,7 @@ def criar_registro_retirada_qrcode():
             "Resumo_Kits": resumo_kits,
             "Status": nova_retirada.status
         }
+        registrar_log(colaborador["id"], "QRCODE_GERADO", f"Retirada {nova_retirada.codigo_retirada} vinculada a {len(escolhas_kits)} kit(s).")
         return nova_retirada
     finally:
         db.close()
@@ -1778,6 +1811,8 @@ def exibir_qrcode_final():
             
             if sucesso_email:
                 st.success("✅ Cópia enviada para o seu e-mail!")
+
+                registrar_log(cracha, "EMAIL_QRCODE_ENVIADO", f"Enviado para {retirada['Email']}")
             else:
                 st.warning("⚠️ O QR Code está gerado acima, mas houve falha ao enviar a cópia por e-mail.")
                 
@@ -2172,6 +2207,7 @@ def interface():
                         dados_cert, err_cert = analisa_certidao(certidao_est)
                         
                         if err_cert:
+                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"Falha na leitura IA (Estagiário): {err_cert}")
                             st.error(f"⚠️ {err_cert}")
                         else:
                             dados_ok, msg_dados = valida_dados_crianca_certidao(
@@ -2179,6 +2215,7 @@ def interface():
                             )
                             
                             if not dados_ok:
+                                registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou Estagiário: {msg_dados}")
                                 st.error(msg_dados)
                             else:
                                 db = SessionLocal()
@@ -2203,6 +2240,8 @@ def interface():
                                             "motivo_reprova_ia": None,
                                             "url_documento": None
                                         })
+                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_SUCESSO", "Validação de Estagiário aprovada.")
+                                        registrar_log(st.session_state.colaborador['Crachá'], "DEPENDENTE_CARRINHO_ADD", f"Estagiário {nome_colab} validado e adicionado ao carrinho.")
                                         st.success("✅ Documento validado! Seu Kit foi adicionado ao carrinho.")
                                         st.session_state.aguardando_decisao = True
                                         st.rerun()
@@ -2336,6 +2375,11 @@ def interface():
                                                 "motivo_reprova_ia": f"Forçado pelo usuário. Erro original: {erro_salvo}",
                                                 "url_documento": url_doc_a2
                                             })
+
+                                            cracha_log = st.session_state.colaborador['Crachá']
+                                            registrar_log(cracha_log, "ENVIO_RH_BYPASS", f"Bypass forçado (A2). Erro contornado: {erro_salvo}")
+                                            registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_a2} adicionado ao carrinho via Bypass.")
+
                                             st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                             st.session_state.aguardando_decisao = True
                                             st.rerun()
@@ -2346,10 +2390,13 @@ def interface():
                                         dados_a2, err_a2 = analisa_certidao_averbacao(certidao_averbada)
                                         
                                         if err_a2:
+                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A2: {err_a2}")
                                             st.session_state.erro_ia_a2 = err_a2
                                             st.rerun()
                                         elif not dados_a2.get("tem_averbacao_adocao"):
-                                            st.session_state.erro_ia_a2 = "O documento não possui a averbação de adoção exigida."
+                                            msg_a2_err = "O documento não possui a averbação de adoção exigida."
+                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A2: {msg_a2_err}")
+                                            st.session_state.erro_ia_a2 = msg_a2_err
                                             st.rerun()
                                         else:
                                             dados_ok, msg_dados = valida_dados_crianca_certidao(
@@ -2357,12 +2404,14 @@ def interface():
                                             )
                                             
                                             if not dados_ok:
+                                                registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A2: {msg_dados}")
                                                 st.session_state.erro_ia_a2 = msg_dados
                                                 st.rerun()
                                             else:
                                                 dados_decl_a2, err_decl_a2 = analisa_declaracao_escolar(declaracao_escolar_a2)
                                                 
                                                 if err_decl_a2:
+                                                    registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A2 (Declaração): {err_decl_a2}")
                                                     st.session_state.erro_ia_a2 = err_decl_a2
                                                     st.rerun()
                                                 else:
@@ -2371,6 +2420,7 @@ def interface():
                                                     )
 
                                                     if not decl_ok_a2:
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A2 (Declaração): {msg_decl_a2}")
                                                         st.session_state.erro_ia_a2 = msg_decl_a2
                                                         st.rerun()
                                                     else:
@@ -2382,7 +2432,9 @@ def interface():
                                                         pais_responsaveis = [padroniza_texto(p) for p in dados_a2.get("nomes_pais_responsaveis", [])]
 
                                                         if nome_colab not in pais_responsaveis:
-                                                            st.session_state.erro_ia_a2 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como pai/mãe adotivo(a) na certidão."
+                                                            msg_pais_err = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como pai/mãe adotivo(a) na certidão."
+                                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A2: {msg_pais_err}")
+                                                            st.session_state.erro_ia_a2 = msg_pais_err
                                                             st.rerun()
                                                         else:
                                                             db = SessionLocal()
@@ -2410,6 +2462,11 @@ def interface():
                                                                         "motivo_reprova_ia": motivo_rh_a2,
                                                                         "url_documento": None
                                                                     })
+
+                                                                    cracha_log = st.session_state.colaborador['Crachá']
+                                                                    registrar_log(cracha_log, "IA_VALIDACAO_SUCESSO", "Validação A2 aprovada pela IA.")
+                                                                    registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_a2} validado pela IA e adicionado ao carrinho.")
+
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                                     st.session_state.aguardando_decisao = True
                                                                     st.rerun()
@@ -2484,6 +2541,11 @@ def interface():
                                                 "motivo_reprova_ia": f"Forçado pelo usuário. Erro original: {erro_salvo}",
                                                 "url_documento": url_doc_a3
                                             })
+
+                                            cracha_log = st.session_state.colaborador['Crachá']
+                                            registrar_log(cracha_log, "ENVIO_RH_BYPASS", f"Bypass forçado (A3). Erro contornado: {erro_salvo}")
+                                            registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_a3} adicionado ao carrinho via Bypass.")
+
                                             st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                             st.session_state.aguardando_decisao = True
                                             st.rerun()
@@ -2493,18 +2555,23 @@ def interface():
                                     with st.spinner("Analisando documento judicial via IA e cruzando dados... Aguarde"):
                                         dados_a3, err_a3 = analisa_guarda_adocao(doc_judicial)
                                         if err_a3:
+                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A3: {err_a3}")
                                             st.session_state.erro_ia_a3 = err_a3
                                             st.rerun()
                                         else:
                                             if not dados_a3.get("documento_judicial_valido"):
-                                                st.session_state.erro_ia_a3 = "Documento adicionado não possui validade judicial."
+                                                msg_doc_val = "Documento adicionado não possui validade judicial."
+                                                registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A3: {msg_doc_val}")
+                                                st.session_state.erro_ia_a3 = msg_doc_val
                                                 st.rerun()
                                             else:
                                                 # Cruzamento de nome do colaborador na guarda
                                                 nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
                                                 responsaveis_judiciais = [padroniza_texto(r) for r in dados_a3.get("responsaveis", [])]
                                                 if responsaveis_judiciais and nome_colab not in responsaveis_judiciais:
-                                                    st.session_state.erro_ia_a3 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como guardião(ã) no documento judicial."
+                                                    msg_resp_err = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não consta como guardião(ã) no documento judicial."
+                                                    registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou A3: {msg_resp_err}")
+                                                    st.session_state.erro_ia_a3 = msg_resp_err
                                                     st.rerun()
                                                 else:
                                                     db = SessionLocal()
@@ -2532,6 +2599,11 @@ def interface():
                                                                 "motivo_reprova_ia": None,
                                                                 "url_documento": None
                                                             })
+
+                                                            cracha_log = st.session_state.colaborador['Crachá']
+                                                            registrar_log(cracha_log, "IA_VALIDACAO_SUCESSO", "Validação A3 aprovada pela IA.")
+                                                            registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_a3} validado pela IA e adicionado ao carrinho.")
+
                                                             st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                             st.session_state.aguardando_decisao = True
                                                             st.rerun()
@@ -2662,6 +2734,11 @@ def interface():
                                             "motivo_reprova_ia": f"Forçado pelo usuário. Erro original: {erro_salvo}",
                                             "url_documento": url_doc_b1
                                         })
+
+                                        cracha_log = st.session_state.colaborador['Crachá']
+                                        registrar_log(cracha_log, "ENVIO_RH_BYPASS", f"Bypass forçado (B1). Erro contornado: {erro_salvo}")
+                                        registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_b1} adicionado ao carrinho via Bypass.")
+
                                         st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                         st.session_state.aguardando_decisao = True
                                         st.rerun()
@@ -2680,6 +2757,7 @@ def interface():
                                         err_cert = None
 
                                     if err_cert:
+                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B1 (Identidade): {err_cert}")
                                         st.session_state.erro_ia_b1 = err_cert
                                         st.rerun()
                                     else:
@@ -2688,12 +2766,14 @@ def interface():
                                         )
                                         
                                         if not dados_ok:
+                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B1: {msg_dados}")
                                             st.session_state.erro_ia_b1 = msg_dados
                                             st.rerun()
                                         else:
                                             dados_decl_b1, err_decl_b1 = analisa_declaracao_escolar(declaracao_escolar_b1)
                                             
                                             if err_decl_b1:
+                                                registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B1 (Declaração): {err_decl_b1}")
                                                 st.session_state.erro_ia_b1 = err_decl_b1
                                                 st.rerun()
                                             else:
@@ -2702,6 +2782,7 @@ def interface():
                                                 )
                                                 
                                                 if not decl_ok_b1:
+                                                    registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B1 (Declaração): {msg_decl_b1}")
                                                     st.session_state.erro_ia_b1 = msg_decl_b1
                                                     st.rerun()
                                                 else:
@@ -2712,10 +2793,13 @@ def interface():
                                                     dados_uniao, err_uniao = analisa_uniao_estavel(uniao_b)
                                                     
                                                     if err_uniao:
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B1 (União Estável): {err_uniao}")
                                                         st.session_state.erro_ia_b1 = err_uniao
                                                         st.rerun()
                                                     elif not dados_uniao.get("firma_reconhecida"):
-                                                        st.session_state.erro_ia_b1 = "A Declaração de União Estável precisa ter firma reconhecida em cartório visível."
+                                                        msg_firma_err = "A Declaração de União Estável precisa ter firma reconhecida em cartório visível."
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B1: {msg_firma_err}")
+                                                        st.session_state.erro_ia_b1 = msg_firma_err
                                                         st.rerun()
                                                     else:
                                                         nome_colab = padroniza_texto(st.session_state.colaborador['Nome'])
@@ -2728,7 +2812,9 @@ def interface():
                                                         texto_uniao_normalizado = padroniza_texto(texto_uniao_completo)
 
                                                         if nome_colab not in texto_uniao_normalizado:
-                                                            st.session_state.erro_ia_b1 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado na Declaração de União Estável."
+                                                            msg_uniao_err = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado na Declaração de União Estável."
+                                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B1: {msg_uniao_err}")
+                                                            st.session_state.erro_ia_b1 = msg_uniao_err
                                                             st.rerun()
                                                         else:
                                                             db = SessionLocal()
@@ -2756,6 +2842,11 @@ def interface():
                                                                         "motivo_reprova_ia": motivo_rh_b1,
                                                                         "url_documento": None
                                                                     })
+
+                                                                    cracha_log = st.session_state.colaborador['Crachá']
+                                                                    registrar_log(cracha_log, "IA_VALIDACAO_SUCESSO", "Validação B1 aprovada pela IA.")
+                                                                    registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_b1} validado pela IA e adicionado ao carrinho.")
+
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                                     st.session_state.aguardando_decisao = True
                                                                     st.rerun()
@@ -2849,6 +2940,11 @@ def interface():
                                             "motivo_reprova_ia": f"Forçado pelo usuário. Erro original: {erro_salvo}",
                                             "url_documento": url_doc_b2
                                         })
+
+                                        cracha_log = st.session_state.colaborador['Crachá']
+                                        registrar_log(cracha_log, "ENVIO_RH_BYPASS", f"Bypass forçado (B2). Erro contornado: {erro_salvo}")
+                                        registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_b2} adicionado ao carrinho via Bypass.")
+
                                         st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                         st.session_state.aguardando_decisao = True
                                         st.rerun()
@@ -2867,6 +2963,7 @@ def interface():
                                         err_cert = None
 
                                     if err_cert:
+                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B2 (Identidade): {err_cert}")
                                         st.session_state.erro_ia_b2 = err_cert
                                         st.rerun()
                                     else:
@@ -2874,12 +2971,14 @@ def interface():
                                             dados_cert, nome_filho_b2, data_nascimento_b2, genero_b2
                                         )
                                         if not dados_ok:
+                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B2: {msg_dados}")
                                             st.session_state.erro_ia_b2 = msg_dados
                                             st.rerun()
                                         else:
                                             dados_decl_b2, err_decl_b2 = analisa_declaracao_escolar(declaracao_escolar_b2)
                                             
                                             if err_decl_b2:
+                                                registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B2 (Declaração): {err_decl_b2}")
                                                 st.session_state.erro_ia_b2 = err_decl_b2
                                                 st.rerun()
                                             else:
@@ -2888,6 +2987,7 @@ def interface():
                                                 )
                                                 
                                                 if not decl_ok_b2:
+                                                    registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B2 (Declaração): {msg_decl_b2}")
                                                     st.session_state.erro_ia_b2 = msg_decl_b2
                                                     st.rerun()
                                                 else:
@@ -2897,10 +2997,13 @@ def interface():
                                                     dados_casam, err_casam = analisa_certidao_complementar(casamento_b2)
                                                     
                                                     if err_casam:
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B2 (Casamento): {err_casam}")
                                                         st.session_state.erro_ia_b2 = err_casam
                                                         st.rerun()
                                                     elif not dados_casam.get("documento_valido"):
-                                                        st.session_state.erro_ia_b2 = "A Certidão de Casamento é inválida ou não pôde ser lida."
+                                                        msg_casam_val = "A Certidão de Casamento é inválida ou não pôde ser lida."
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B2: {msg_casam_val}")
+                                                        st.session_state.erro_ia_b2 = msg_casam_val
                                                         st.rerun()
                                                     else:
                                                         # 🛡️ CRUZAMENTO ROBUSTO B2 (Varre todo o texto da certidão de casamento)
@@ -2914,7 +3017,9 @@ def interface():
                                                         texto_casam_normalizado = padroniza_texto(texto_casam_completo)
 
                                                         if nome_colab not in texto_casam_normalizado:
-                                                            st.session_state.erro_ia_b2 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado na Certidão de Casamento."
+                                                            msg_casam_err = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado na Certidão de Casamento."
+                                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou B2: {msg_casam_err}")
+                                                            st.session_state.erro_ia_b2 = msg_casam_err
                                                             st.rerun()
                                                         else:
                                                             db = SessionLocal()
@@ -2942,6 +3047,11 @@ def interface():
                                                                         "motivo_reprova_ia": motivo_rh_b2,
                                                                         "url_documento": None
                                                                     })
+
+                                                                    cracha_log = st.session_state.colaborador['Crachá']
+                                                                    registrar_log(cracha_log, "IA_VALIDACAO_SUCESSO", "Validação B2 aprovada pela IA.")
+                                                                    registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_b2} validado pela IA e adicionado ao carrinho.")
+
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                                     st.session_state.aguardando_decisao = True
                                                                     st.rerun()
@@ -3073,6 +3183,11 @@ def interface():
                                             "motivo_reprova_ia": f"Forçado pelo usuário. Erro original: {erro_salvo}",
                                             "url_documento": url_doc_c1
                                         })
+
+                                        cracha_log = st.session_state.colaborador['Crachá']
+                                        registrar_log(cracha_log, "ENVIO_RH_BYPASS", f"Bypass forçado (C1). Erro contornado: {erro_salvo}")
+                                        registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_c1} adicionado ao carrinho via Bypass.")
+
                                         st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                         st.session_state.aguardando_decisao = True
                                         st.rerun()
@@ -3091,6 +3206,7 @@ def interface():
                                         err_cert_c1 = None
 
                                     if err_cert_c1:
+                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C1 (Identidade): {err_cert_c1}")
                                         st.session_state.erro_ia_c1 = err_cert_c1
                                         st.rerun()
                                     else:
@@ -3098,12 +3214,14 @@ def interface():
                                             dados_cert_c1, nome_filho_c1, data_nascimento_c1, genero_c1
                                         )
                                         if not dados_ok:
+                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C1: {msg_dados}")
                                             st.session_state.erro_ia_c1 = msg_dados
                                             st.rerun()
                                         else:
                                             dados_decl_c1, err_decl_c1 = analisa_declaracao_escolar(declaracao_escolar_c1)
                                             
                                             if err_decl_c1:
+                                                registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C1 (Declaração): {err_decl_c1}")
                                                 st.session_state.erro_ia_c1 = err_decl_c1
                                                 st.rerun()
                                             else:
@@ -3112,6 +3230,7 @@ def interface():
                                                 )
                                                 
                                                 if not decl_ok_c1:
+                                                    registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C1 (Declaração): {msg_decl_c1}")
                                                     st.session_state.erro_ia_c1 = msg_decl_c1
                                                     st.rerun()
                                                 else:
@@ -3121,10 +3240,13 @@ def interface():
                                                     dados_guarda, err_guarda = analisa_guarda_judicial(termo_guarda_c1)
                                                     
                                                     if err_guarda:
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C1 (Guarda): {err_guarda}")
                                                         st.session_state.erro_ia_c1 = err_guarda
                                                         st.rerun()
                                                     elif not dados_guarda.get("documento_valido"):
-                                                        st.session_state.erro_ia_c1 = "O Termo de Guarda é inválido ou não pôde ser lido."
+                                                        msg_guarda_val = "O Termo de Guarda é inválido ou não pôde ser lido."
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C1: {msg_guarda_val}")
+                                                        st.session_state.erro_ia_c1 = msg_guarda_val
                                                         st.rerun()
                                                     else:
                                                         # 🛡️ CRUZAMENTO ROBUSTO C1 (Varre todo o termo de guarda)
@@ -3138,7 +3260,9 @@ def interface():
                                                         texto_guarda_normalizado = padroniza_texto(texto_guarda_completo)
 
                                                         if nome_colab not in texto_guarda_normalizado:
-                                                            st.session_state.erro_ia_c1 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado no Termo de Guarda Judicial."
+                                                            msg_guarda_err = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado no Termo de Guarda Judicial."
+                                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C1: {msg_guarda_err}")
+                                                            st.session_state.erro_ia_c1 = msg_guarda_err
                                                             st.rerun()
                                                         else:
                                                             db = SessionLocal()
@@ -3166,6 +3290,11 @@ def interface():
                                                                         "motivo_reprova_ia": motivo_rh_c1,
                                                                         "url_documento": None
                                                                     })
+
+                                                                    cracha_log = st.session_state.colaborador['Crachá']
+                                                                    registrar_log(cracha_log, "IA_VALIDACAO_SUCESSO", "Validação C1 aprovada pela IA.")
+                                                                    registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_c1} validado pela IA e adicionado ao carrinho.")
+
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                                     st.session_state.aguardando_decisao = True
                                                                     st.rerun()
@@ -3259,6 +3388,11 @@ def interface():
                                             "motivo_reprova_ia": f"Forçado pelo usuário. Erro original: {erro_salvo}",
                                             "url_documento": url_doc_c2
                                         })
+
+                                        cracha_log = st.session_state.colaborador['Crachá']
+                                        registrar_log(cracha_log, "ENVIO_RH_BYPASS", f"Bypass forçado (C2). Erro contornado: {erro_salvo}")
+                                        registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_c2} adicionado ao carrinho via Bypass.")
+
                                         st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                         st.session_state.aguardando_decisao = True
                                         st.rerun()
@@ -3277,6 +3411,7 @@ def interface():
                                         err_cert_c2 = None
 
                                     if err_cert_c2:
+                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C2 (Identidade): {err_cert_c2}")
                                         st.session_state.erro_ia_c2 = err_cert_c2
                                         st.rerun()
                                     else:
@@ -3284,12 +3419,14 @@ def interface():
                                             dados_cert_c2, nome_filho_c2, data_nascimento_c2, genero_c2
                                         )
                                         if not dados_ok:
+                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C2: {msg_dados}")
                                             st.session_state.erro_ia_c2 = msg_dados
                                             st.rerun()
                                         else:
                                             dados_decl_c2, err_decl_c2 = analisa_declaracao_escolar(declaracao_escolar_c2)
                                             
                                             if err_decl_c2:
+                                                registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C2 (Declaração): {err_decl_c2}")
                                                 st.session_state.erro_ia_c2 = err_decl_c2
                                                 st.rerun()
                                             else:
@@ -3298,6 +3435,7 @@ def interface():
                                                 )
                                                 
                                                 if not decl_ok_c2:
+                                                    registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C2 (Declaração): {msg_decl_c2}")
                                                     st.session_state.erro_ia_c2 = msg_decl_c2
                                                     st.rerun()
                                                 else:
@@ -3307,10 +3445,13 @@ def interface():
                                                     dados_tutela, err_tutela = analisa_tutela_judicial(termo_tutela_c2)
                                                     
                                                     if err_tutela:
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C2 (Tutela): {err_tutela}")
                                                         st.session_state.erro_ia_c2 = err_tutela
                                                         st.rerun()
                                                     elif not dados_tutela.get("documento_valido"):
-                                                        st.session_state.erro_ia_c2 = "O Termo de Tutela é inválido ou não pôde ser lido."
+                                                        msg_tutela_val = "O Termo de Tutela é inválido ou não pôde ser lido."
+                                                        registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C2: {msg_tutela_val}")
+                                                        st.session_state.erro_ia_c2 = msg_tutela_val
                                                         st.rerun()
                                                     else:
                                                         # 🛡️ CRUZAMENTO ROBUSTO C2 (Varre todo o termo de tutela)
@@ -3324,7 +3465,9 @@ def interface():
                                                         texto_tutela_normalizado = padroniza_texto(texto_tutela_completo)
 
                                                         if nome_colab not in texto_tutela_normalizado:
-                                                            st.session_state.erro_ia_c2 = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado no Termo de Tutela Judicial."
+                                                            msg_tutela_err = f"O nome do colaborador ({st.session_state.colaborador['Nome']}) não foi encontrado no Termo de Tutela Judicial."
+                                                            registrar_log(st.session_state.colaborador['Crachá'], "IA_VALIDACAO_FALHA", f"IA Rejeitou C2: {msg_tutela_err}")
+                                                            st.session_state.erro_ia_c2 = msg_tutela_err
                                                             st.rerun()
                                                         else:
                                                             db = SessionLocal()
@@ -3352,9 +3495,15 @@ def interface():
                                                                         "motivo_reprova_ia": motivo_rh_c2,
                                                                         "url_documento": None
                                                                     })
+
+                                                                    cracha_log = st.session_state.colaborador['Crachá']
+                                                                    registrar_log(cracha_log, "IA_VALIDACAO_SUCESSO", "Validação C2 aprovada pela IA.")
+                                                                    registrar_log(cracha_log, "DEPENDENTE_CARRINHO_ADD", f"Dependente {nome_final_c2} validado pela IA e adicionado ao carrinho.")
+
                                                                     st.success("✅ Dependente adicionado ao carrinho com sucesso!")
                                                                     st.session_state.aguardando_decisao = True
                                                                     st.rerun()
                                                             finally:
                                                                 db.close()
+
 interface()
