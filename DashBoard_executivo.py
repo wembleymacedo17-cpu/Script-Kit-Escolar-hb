@@ -14,9 +14,6 @@ df_escolhas_kits = pd.read_sql("SELECT * FROM escolhas_kits", con=engine)
 
 
 
-
-
-
 # Tratamento prévio da idade e faixa etária (necessário para o filtro funcionar completo se precisar)
 df_dependentes['data_nascimento'] = pd.to_datetime(df_dependentes['data_nascimento'])
 hoje = pd.to_datetime('today')
@@ -85,13 +82,21 @@ with col_graf1:
     # Gráfico de Gênero (Rosca) baseado nos dados filtrados
     df_genero = df_filtrado['genero'].value_counts().reset_index()
     df_genero.columns = ['Gênero', 'Quantidade']
+
+    cores_genero = {
+        'Feminino': '#FF69B4',  
+        'Masculino': '#1F77B4'   
+    }
+
     
     fig_genero = px.pie(
         df_genero, 
         names='Gênero', 
         values='Quantidade', 
         hole=0.4, 
-        title="Distribuição por Gênero"
+        title="Distribuição por Gênero",
+        color='Gênero',                       
+        color_discrete_map=cores_genero          
     )
     st.plotly_chart(fig_genero, use_container_width=True)
 
@@ -134,7 +139,7 @@ fig_linha = px.line(
     title="Volume Diário de Cadastros (Evolução Temporal)",
     labels={'Data': 'Data do Cadastro', 'Cadastros': 'Qtd. Cadastros'}
 )
-fig_linha.update_traces(line_color='#1F77B4', line_width=3)
+fig_linha.update_traces(line_color="#DD1378", line_width=6)
 st.plotly_chart(fig_linha, use_container_width=True)
 
 # ========================== 5. FLUXOS E ESCOLARIDADE ==========================
