@@ -41,7 +41,7 @@ streamlit run sistema.py
 streamlit run Revisor.py
 gemini-1.5-flash
 
-
+streamlit run DashBoard_executivo.py --server.port 8506
 
 streamlit run Revisor.py --server.port 8503
 

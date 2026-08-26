@@ -2,10 +2,12 @@ import os
 from datetime import datetime, timezone, timedelta
 import pandas as pd
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, BigInteger, Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean, text
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Date, DateTime, BigInteger, 
+    Text, ForeignKey, UniqueConstraint, CheckConstraint, Boolean, text
+)
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import sessionmaker, relationship, declarative_base
-
 
 # ===================== CONFIGURAÇÃO =====================
 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
@@ -66,9 +68,11 @@ class Dependente(Base):
     escolaridade = Column(String(100))
     ano_escola = Column(String(50))
     data_cadastro = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    revisao_rh = Column(String(50))
-    motivo_reprova_ia = Column(String, nullable=True)
-    url_documento = Column(String, nullable=True)
+    
+    # 🔒 PROTEÇÃO DE TAMANHO DE TEXTO (AWS/RDS COMPATÍVEL):
+    revisao_rh = Column(Text, nullable=True)         # Convertido para Text (Suporta frases longas)
+    motivo_reprova_ia = Column(Text, nullable=True)   # Convertido para Text (Suporta retornos longos do Gemini)
+    url_documento = Column(Text, nullable=True)       # Convertido para Text (Suporta Múltiplos Links do S3)
 
     aceite_ia = Column(Boolean, default=False)
     aceite_lgpd = Column(Boolean, default=False)
@@ -90,7 +94,7 @@ class EscolhaKit(Base):
     id_escolha = Column(Integer, primary_key=True, autoincrement=True)
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
     id_dependente = Column(Integer, ForeignKey("dependentes.id_dependente", ondelete="CASCADE"), nullable=False)
-    kit_escolhido = Column(String(150), nullable=False)
+    kit_escolhido = Column(Text, nullable=False)    # Convertido para Text
     data_escolha = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     aceite_variacao_kit = Column(Boolean, default=False)
     data_aceite_variacao = Column(DateTime, nullable=True)
@@ -106,10 +110,10 @@ class Retirada(Base):
     )
     
     id_retirada = Column(Integer, primary_key=True, autoincrement=True)
-    codigo_retirada = Column(String(255), unique=True, nullable=False)
+    codigo_retirada = Column(Text, unique=True, nullable=False) # Convertido para Text
     id_colaborador = Column(BigInteger, ForeignKey("colaboradores.id", ondelete="CASCADE"), nullable=False)
-    email = Column(String(150))
-    telefone = Column(String(20))
+    email = Column(Text)                                        # Convertido para Text
+    telefone = Column(String(50))
     qtd_kits = Column(Integer, nullable=False)
     resumo_kits = Column(Text)
     status = Column(String(20), default='PENDENTE', nullable=False)
@@ -139,13 +143,13 @@ def get_db():
 
 
 def init_db():
-    """Cria as tabelas no banco de dados"""
+    """Cria as tabelas no banco de dados com os novos tipos de colunas"""
     Base.metadata.create_all(bind=engine)
-    print("✅ Tabelas criadas ou já existentes.")
+    print("✅ Tabelas criadas ou atualizadas com sucesso para o banco de dados!")
 
 
 def atualizar_colaboradores_merge(engine_db, df_oracle: pd.DataFrame):
-    """Sincroniza os dados do Senior com o Supabase usando Tabela Staging."""
+    """Sincroniza os dados do Senior com o banco usando Tabela Staging."""
     try:
         print("📥 Subindo carga para tabela temporária 'stg_colaboradores'...")
         
