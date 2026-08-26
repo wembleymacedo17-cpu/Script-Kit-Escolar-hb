@@ -17,12 +17,11 @@ import time
 from rate_limiter import verificar_limite_clique
 # ==================== IMPORTS DO BANCO ====================
 from database import SessionLocal, Colaborador, Dependente, EscolhaKit, Retirada, registrar_log
-from conector_oracle import OracleConnector
 from conector_Postgre import SupabaseConnector
 import boto3
 from botocore.exceptions import ClientError
 from notificador_email import NotificadorEmail, SMTP_SERVER, SMTP_PORT, LOGIN_SMTP, SENHA_KEY, EMAIL_REMETENTE
-from query import CARGOS_REJEIATO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY, TAMANHO_MAXIMO_MB,EXTENSOES_PERMITIDAS
+from query import CARGOS_REJEITADO, DOMINIOS_PESSOAIS_PERMITIDOS, MODELOS_GEMINI, ERROS_RETRY, TAMANHO_MAXIMO_MB,EXTENSOES_PERMITIDAS
 from autenticacao_totp import verificar_autenticacao_totp
 
 
@@ -593,6 +592,7 @@ def analisa_certidao_complementar(arquivo):
     except Exception:
         return None, "Erro ao ler o arquivo de casamento/divórcio."
 
+    
 
 #---------------------------------------------------FUNCOES DE SISTEMA
 
@@ -646,7 +646,7 @@ def busca_colaborador(situacoes_invalidas=["Desligado", "Aposentadoria p/Invalid
             st.session_state.colaborador = None  
             return None
 
-        if str(colaborador["id_cargo"]) in CARGOS_REJEIATO:
+        if str(colaborador["id_cargo"]) in CARGOS_REJEITADO:
             st.error(
                 "🎁 O Kit Escolar é uma iniciativa de apoio social direcionada a categorias específicas "
                 "da nossa instituição e, por isso, não está disponível para o seu cargo. "
@@ -1819,6 +1819,10 @@ def exibir_qrcode_final():
         st.session_state.qrcode_processado = True
 
     return imagem_qrcode
+
+
+
+
 
 
 #------------------------------------------------------------PAINEL DE CONTROLE------------------------------------------------------------------------
