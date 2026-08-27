@@ -5,8 +5,14 @@ import pyotp
 import qrcode
 import streamlit as st
 from sqlalchemy import text
-from datetime import datetime, date
-from database import registrar_log, conta_esta_bloqueada, obter_ip_cliente
+from datetime import datetime, date, timedelta, timezone
+from database import (
+    registrar_log, 
+    conta_esta_bloqueada, 
+    obter_ip_cliente, 
+    SessionLocal, 
+    LogAuditoria
+)
 
 
 def gerar_secret_totp():
@@ -49,19 +55,31 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
     data_nasc_banco = colaborador.get("data_nascimento")
     cpf_banco = str(colaborador.get("cpf", "")).strip().zfill(11)
 
-    # Controle de tentativas na sessão para exibir avisos dinâmicos
-    chave_falhas = f"falhas_totp_{cracha_colab}"
-    if chave_falhas not in st.session_state:
-        st.session_state[chave_falhas] = 0
+    LIMITE_FALHAS = 5
+    MINUTOS_BLOQUEIO = 5
 
-    # 🛑 BARREIRA PREVENTIVA: Bloqueia o Crachá (em vez do IP)
-    if conta_esta_bloqueada(cracha_colab, limite_falhas=5, minutos=30):
+    # 🛑 BARREIRA PREVENTIVA: Bloqueia o Crachá se houver falhas acumuladas nos últimos 5 min
+    if conta_esta_bloqueada(cracha_colab, limite_falhas=LIMITE_FALHAS, minutos=MINUTOS_BLOQUEIO):
         st.error(
             f"🚨 **Acesso temporariamente bloqueado por segurança.**\n\n"
             f"Detectamos múltiplas tentativas de acesso incorretas para o crachá `{cracha_colab}`. "
-            f"Por favor, aguarde 30 minutos antes de tentar novamente."
+            f"Por favor, aguarde **{MINUTOS_BLOQUEIO} minutos** antes de tentar novamente."
         )
         return False
+
+    # Função auxiliar para buscar falhas reais direto no banco
+    def obter_tentativas_restantes():
+        db = SessionLocal()
+        try:
+            limite_tempo = datetime.now(timezone.utc) - timedelta(minutes=MINUTOS_BLOQUEIO)
+            total_falhas = db.query(LogAuditoria).filter(
+                LogAuditoria.cracha == cracha_colab,
+                LogAuditoria.acao.in_(["FALHA_CONFIRMACAO_IDENTIDADE", "FALHA_ATIVACAO_TOTP", "FALHA_LOGIN_TOTP"]),
+                LogAuditoria.data_hora >= limite_tempo
+            ).count()
+            return max(0, LIMITE_FALHAS - total_falhas)
+        finally:
+            db.close()
 
     # -------------------------------------------------------------
     # FLUXO 1: PRIMEIRO ACESSO (Confirmação de Identidade pré-QR Code)
@@ -130,7 +148,11 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                     
                     msg_detalhes = " ".join(erros_identidade)
                     registrar_log(cracha_colab, "FALHA_CONFIRMACAO_IDENTIDADE", f"Tentativa negada: {msg_detalhes}", ip_origem=ip_atual)
-                    st.error(f"❌ Falha na validação: {msg_detalhes} O cadastro do 2FA não pôde ser liberado.")
+                    
+                    restantes = obter_tentativas_restantes()
+                    st.error(f"❌ Falha na validação: {msg_detalhes} Você tem **{restantes}** tentativa(s) restante(s) antes do bloqueio de {MINUTOS_BLOQUEIO} minutos.")
+                    if restantes == 0:
+                        st.rerun()
             
             return False
 
@@ -205,7 +227,6 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 colaborador["totp_secret"] = str(secret).strip()
                 colaborador["totp_ativo"] = True
                 st.session_state.autenticado_totp = True
-                st.session_state[chave_falhas] = 0  # Reseta contador em caso de sucesso
                 
                 registrar_log(cracha_colab, "TOTP_ATIVADO_SUCESSO", "Primeiro acesso concluído e chave 2FA vinculada ao dispositivo.", ip_origem=ip_atual)
 
@@ -217,15 +238,16 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
                 st.success("✅ Validador configurado com sucesso!")
                 return True
             else:
-                st.session_state[chave_falhas] += 1
-                tentativas_restantes = max(0, 5 - st.session_state[chave_falhas])
-                
                 registrar_log(cracha_colab, "FALHA_ATIVACAO_TOTP", "Código de 6 dígitos incorreto durante a tentativa de ativação.", ip_origem=ip_atual)
-                st.error(f"❌ Código incorreto. Você tem **{tentativas_restantes}** tentativa(s) restante(s) antes do bloqueio de 30 minutos.")
                 
-                # Aviso de relógio a partir do 2º erro
-                if st.session_state[chave_falhas] >= 2:
+                restantes = obter_tentativas_restantes()
+                st.error(f"❌ Código incorreto. Você tem **{restantes}** tentativa(s) restante(s) antes do bloqueio de {MINUTOS_BLOQUEIO} minutos.")
+                
+                if restantes <= 3:
                     st.warning("⚠️ **Dica de relógio:** Verifique se a **data e a hora** do seu celular/dispositivo estão configuradas para sincronização automática com a rede. Relógios dessincronizados impedem a validação do código.")
+                
+                if restantes == 0:
+                    st.rerun()
 
         return False
 
@@ -240,18 +262,18 @@ def verificar_autenticacao_totp(colaborador: dict, engine_db) -> bool:
 
         if btn_entrar:
             if validar_codigo_totp(secret_cadastrado, codigo_login):
-                st.session_state[chave_falhas] = 0  # Reseta contador em caso de sucesso
                 registrar_log(cracha_colab, "LOGIN_TOTP_SUCESSO", "Acesso autorizado via código 2FA.", ip_origem=ip_atual)
                 return True
             else:
-                st.session_state[chave_falhas] += 1
-                tentativas_restantes = max(0, 6 - st.session_state[chave_falhas])
-                
                 registrar_log(cracha_colab, "FALHA_LOGIN_TOTP", "Código TOTP inválido ou expirado digitado no login recorrente.", ip_origem=ip_atual)
-                st.error(f"❌ Código inválido ou expirado. Você tem **{tentativas_restantes}** tentativa(s) restante(s) antes do bloqueio temporário de 30 minutos.")
                 
-                # Aviso de relógio a partir do 2º erro
-                if st.session_state[chave_falhas] >= 3:
+                restantes = obter_tentativas_restantes()
+                st.error(f"❌ Código inválido ou expirado. Você tem **{restantes}** tentativa(s) restante(s) antes do bloqueio temporário de {MINUTOS_BLOQUEIO} minutos.")
+                
+                if restantes <= 3:
                     st.warning("⚠️ **Dica importante:** Verifique se a **data e a hora do seu celular** estão sincronizadas automaticamente. Diferenças de horário invalidam os códigos gerados pelo autenticador.")
+                
+                if restantes == 0:
+                    st.rerun()
 
         return False
