@@ -244,7 +244,7 @@ def registrar_log(cracha: int, acao: str, detalhes: str = None, ip_origem: str =
         db.close()
 
 
-def conta_esta_bloqueada(cracha: int, limite_falhas: int = 5, minutos: int = 30) -> bool:
+def conta_esta_bloqueada(cracha: int, limite_falhas: int = 5, minutos: int = 5) -> bool:
     """Verifica se o crachá do colaborador acumulou falhas excessivas na janela de tempo."""
     if not cracha:
         return False
